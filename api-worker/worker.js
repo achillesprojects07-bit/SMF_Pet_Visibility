@@ -3,41 +3,21 @@ let cachedGoogleToken = null;
 // v5 serves Field, Admin and Client. High-risk store sync, mode switches and demo reset
 // remain intentionally excluded from the Worker allowlist during active deployment.
 const ACTION_ALLOWLIST = new Set([
-  // Shared authentication
   'loginV4',
-
-  // Field
-  'getFieldHomeV4',
-  'getStoreV4',
-  'saveStoreV4',
-  'submitStoreVisitV4',
-  'submitDayV4',
-  'removePhotoV4',
-  'rescheduleStoreV4',
-
-  // Client — read-only
-  'getClientDashboardV4',
-  'getClientStoreV4',
-
-  // Admin — dashboard, POE review, users, rules and correction workflow
-  'getAdminDashboardV4',
-  'getAdminIssuesV4',
-  'getPoeIndexV4',
-  'getAdminStoreV4',
-  'reopenStoreVisitV4',
-  'getUsersV4',
-  'createUserV4',
-  'setUserActiveV4',
-  'setUserTeamV4',
-  'resetUserCodeV4',
-  'getRulesV4',
-  'setStoreGuideV4',
-  'setCategoryGuideV4',
-  'getSystemV4',
-  'photoUploadHealthV4',
-  'healthV4',
-  'createOrResetClientAccessV4'
+  'getFieldHomeV4','getStoreV4','saveStoreV4','submitStoreVisitV4','submitDayV4','removePhotoV4','rescheduleStoreV4',
+  'getClientDashboardV4','getClientStoreV4',
+  'getAdminDashboardV4','getAdminIssuesV4','getPoeIndexV4','getAdminStoreV4','reopenStoreVisitV4',
+  'getUsersV4','createUserV4','setUserActiveV4','setUserTeamV4','resetUserCodeV4',
+  'getRulesV4','setStoreGuideV4','setCategoryGuideV4','getSystemV4','photoUploadHealthV4','healthV4','createOrResetClientAccessV4'
 ]);
+
+const SAFE_BRIDGE_RETRY = new Set([
+  'getBridgeHealthV5','getDriveUploadTokenV5','prepareExternalPhotoV5','commitExternalPhotoV5',
+  'loginV4','getFieldHomeV4','getStoreV4','getClientDashboardV4','getClientStoreV4',
+  'getAdminDashboardV4','getAdminIssuesV4','getPoeIndexV4','getAdminStoreV4','getUsersV4','getRulesV4','getSystemV4','photoUploadHealthV4','healthV4'
+]);
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function corsHeaders(request, env) {
   const origin = request.headers.get('Origin') || '';
@@ -67,29 +47,64 @@ function assertOrigin(request, env) {
   if (origin !== allowed) throw new Error('Origin is not allowed.');
 }
 
-async function callAppsScript(env, action, args) {
+async function bridgeFetchOnce(env, action, args, timeoutMs = 18000) {
   const url = String(env.SCRIPT_API_URL || '').trim();
   const secret = String(env.BRIDGE_SECRET || '').trim();
   if (!url || !secret) throw new Error('API bridge is not configured.');
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bridgeSecret: secret, action, args }),
-    redirect: 'follow'
-  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bridgeSecret: secret, action, args }),
+      redirect: 'follow',
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw new Error('Apps Script bridge timed out while finalizing the request.');
+    throw new Error('Apps Script bridge connection failed.');
+  } finally {
+    clearTimeout(timer);
+  }
+
   const text = await r.text();
   let data;
-  try { data = JSON.parse(text); } catch (_) { throw new Error('Apps Script bridge returned an unreadable response.'); }
-  if (!data || data.ok === false) throw new Error((data && data.error) || 'Apps Script bridge failed.');
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    const type = String(r.headers.get('content-type') || '').toLowerCase();
+    if (!r.ok) throw new Error('Apps Script bridge returned HTTP ' + r.status + ' while finalizing the request.');
+    if (type.includes('text/html')) throw new Error('Apps Script bridge returned an HTML response instead of JSON.');
+    throw new Error('Apps Script bridge returned an unreadable response.');
+  }
+  if (!r.ok || !data || data.ok === false) throw new Error((data && data.error) || ('Apps Script bridge failed (HTTP ' + r.status + ').'));
   return data.result;
+}
+
+async function callAppsScript(env, action, args, options = {}) {
+  const safe = SAFE_BRIDGE_RETRY.has(action);
+  const retries = Number.isInteger(options.retries) ? options.retries : (safe ? 2 : 0);
+  const timeoutMs = Number(options.timeoutMs || 18000);
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await bridgeFetchOnce(env, action, args, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= retries) break;
+      await sleep(700 * (attempt + 1));
+    }
+  }
+  throw lastErr || new Error('Apps Script bridge failed.');
 }
 
 async function getGoogleAccessToken(env, forceFresh = false) {
   const now = Date.now();
-  if (!forceFresh && cachedGoogleToken && cachedGoogleToken.expiresAt > now + 60000) {
-    return cachedGoogleToken.token;
-  }
-  const r = await callAppsScript(env, 'getDriveUploadTokenV5', []);
+  if (!forceFresh && cachedGoogleToken && cachedGoogleToken.expiresAt > now + 60000) return cachedGoogleToken.token;
+  const r = await callAppsScript(env, 'getDriveUploadTokenV5', [], { retries: 2, timeoutMs: 15000 });
   const token = String(r && r.accessToken || '');
   if (!token) throw new Error('Apps Script did not provide a Google Drive upload token.');
   cachedGoogleToken = { token, expiresAt: now + 35 * 60 * 1000 };
@@ -98,16 +113,10 @@ async function getGoogleAccessToken(env, forceFresh = false) {
 
 async function driveFetch(env, url, init = {}, retry401 = true) {
   let token = await getGoogleAccessToken(env, false);
-  let r = await fetch(url, {
-    ...init,
-    headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` }
-  });
+  let r = await fetch(url, { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
   if (r.status === 401 && retry401) {
     token = await getGoogleAccessToken(env, true);
-    r = await fetch(url, {
-      ...init,
-      headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` }
-    });
+    r = await fetch(url, { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
   }
   return r;
 }
@@ -135,9 +144,7 @@ async function ensureDrivePhoto(env, prep, file) {
   if (!fileId) throw new Error('Apps Script did not reserve a Drive file for this upload.');
   let existing = await getDriveFile(env, fileId);
   const currentSize = Number(existing.size || 0);
-  if (currentSize !== Number(file.size || 0) || currentSize === 0) {
-    existing = await uploadDriveMedia(env, fileId, file, prep.mime || file.type);
-  }
+  if (currentSize !== Number(file.size || 0) || currentSize === 0) existing = await uploadDriveMedia(env, fileId, file, prep.mime || file.type);
   return existing;
 }
 
@@ -147,6 +154,29 @@ async function handleAction(request, env) {
   if (!ACTION_ALLOWLIST.has(action)) throw new Error('API action is not allowed.');
   const args = Array.isArray(body.args) ? body.args : [];
   return await callAppsScript(env, action, args);
+}
+
+async function recoverCommittedPhoto(env, code, p) {
+  try {
+    const check = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p], { retries: 2, timeoutMs: 15000 });
+    if (check && check.alreadyCommitted && check.fileId) return { ...check, ok: true, recovered: true };
+  } catch (_) {}
+  return null;
+}
+
+async function commitPhotoWithRecovery(env, code, p, commitPayload) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await callAppsScript(env, 'commitExternalPhotoV5', [code, commitPayload], { retries: 0, timeoutMs: 18000 });
+    } catch (err) {
+      lastErr = err;
+      const recovered = await recoverCommittedPhoto(env, code, p);
+      if (recovered) return recovered;
+      if (attempt < 2) await sleep(900 * (attempt + 1));
+    }
+  }
+  throw lastErr || new Error('Photo reached Drive but final confirmation failed. Retry the same photo; the existing Drive file will be reused.');
 }
 
 async function handlePhoto(request, env) {
@@ -167,16 +197,17 @@ async function handlePhoto(request, env) {
     size: Number(file.size || 0)
   };
 
-  const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p]);
-  if (prep && prep.alreadyCommitted) return prep;
+  const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p], { retries: 2, timeoutMs: 15000 });
+  if (prep && prep.alreadyCommitted) return { ...prep, ok: true, recovered: true };
+
   const drive = await ensureDrivePhoto(env, prep, file);
   const commitPayload = { ...p, folderId: prep.folderId, fileName: prep.fileName, fileId: drive.id };
-  return await callAppsScript(env, 'commitExternalPhotoV5', [code, commitPayload]);
+  return await commitPhotoWithRecovery(env, code, p, commitPayload);
 }
 
 async function handleHealth(request, env) {
-  const bridge = await callAppsScript(env, 'getBridgeHealthV5', []);
-  return jsonResponse(request, env, { ok: true, workerVersion: '5.0.1', bridge });
+  const bridge = await callAppsScript(env, 'getBridgeHealthV5', [], { retries: 1, timeoutMs: 12000 });
+  return jsonResponse(request, env, { ok: true, workerVersion: '5.0.2', bridge });
 }
 
 export default {
@@ -187,14 +218,8 @@ export default {
       const url = new URL(request.url);
       if (url.pathname === '/api/health' && request.method === 'GET') return await handleHealth(request, env);
       if (request.method !== 'POST') return jsonResponse(request, env, { ok: false, error: 'Method not allowed.' }, 405);
-      if (url.pathname === '/api/action') {
-        const result = await handleAction(request, env);
-        return jsonResponse(request, env, { ok: true, result });
-      }
-      if (url.pathname === '/api/photo') {
-        const result = await handlePhoto(request, env);
-        return jsonResponse(request, env, { ok: true, result });
-      }
+      if (url.pathname === '/api/action') return jsonResponse(request, env, { ok: true, result: await handleAction(request, env) });
+      if (url.pathname === '/api/photo') return jsonResponse(request, env, { ok: true, result: await handlePhoto(request, env) });
       return jsonResponse(request, env, { ok: false, error: 'Not found.' }, 404);
     } catch (err) {
       return jsonResponse(request, env, { ok: false, error: String(err && err.message ? err.message : err) }, 400);
