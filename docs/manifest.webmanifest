@@ -1,0 +1,8 @@
+{
+  "name": "SMF Pet Visibility Field",
+  "short_name": "SMF Field",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3f6fa",
+  "theme_color": "#0b4ea2"
+}
