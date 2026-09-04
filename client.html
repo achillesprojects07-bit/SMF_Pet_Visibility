@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b4ea2">
+  <title>SMF Pet Visibility — Client</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+<header class="topbar adminTopbar">
+  <a class="smfBrand" href="./" aria-label="San Miguel Foods Pet Visibility">
+    <svg class="smfLogo" viewBox="0 0 310 120" role="img" aria-label="San Miguel Foods">
+      <path d="M145 5c-25 10-40 25-48 47l20 36c0-31 11-50 39-61z" fill="#38b928"/>
+      <path d="M116 88c8-31 30-47 67-45l-8 39c-4 20-22 31-59 28z" fill="#ed1c24"/>
+      <text x="0" y="80" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">SAN MIGUEL</text>
+      <text x="68" y="116" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">FOODS</text>
+    </svg>
+    <span class="brandProgram">PET VISIBILITY</span>
+  </a>
+  <button id="clientLogout" class="secondary">Sign out</button>
+</header>
+<main class="adminShell">
+  <section class="card adminWelcome">
+    <div><h1>Client Dashboard</h1><div class="small">Read-only deployment status and POE</div></div>
+    <button id="clientRefresh" class="secondary">Refresh</button>
+  </section>
+  <section id="clientBody"><section class="card loading">Loading deployment report…</section></section>
+</main>
+<div id="clientToast" class="toast hidden"></div>
+<script>if(!sessionStorage.getItem('smf_client_code'))location.replace('./');</script>
+<script src="config.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
