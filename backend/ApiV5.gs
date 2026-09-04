@@ -6,6 +6,12 @@ business logic, Store IDs, Store Keys, Sheets and Drive hierarchy.
 
 Required Script Property:
   API_BRIDGE_SECRET = a long random secret shared only with the API Worker.
+
+v5.0.2 stability note:
+- Keeps all existing Sheets/Drive data intact.
+- Does not delete physical Drive files.
+- Keeps upload-token idempotency.
+- Removes repeated reservation/Drive work from photo commit to reduce finalization time.
 */
 
 function apiV5Json_(obj){
@@ -24,12 +30,8 @@ function apiV5RequireBridgeSecret_(received){
 }
 
 function apiV5Actions_(){
-  // Every action below still performs its own existing v4 role authorization.
-  // High-risk Store Sync, mode switching and Demo reset are intentionally excluded.
   return {
     'loginV4':loginV4,
-
-    // Field
     'getFieldHomeV4':getFieldHomeV4,
     'getStoreV4':getStoreV4,
     'saveStoreV4':saveStoreV4,
@@ -37,12 +39,8 @@ function apiV5Actions_(){
     'submitDayV4':submitDayV4,
     'removePhotoV4':removePhotoV4,
     'rescheduleStoreV4':rescheduleStoreV4,
-
-    // Client — read-only
     'getClientDashboardV4':getClientDashboardV4,
     'getClientStoreV4':getClientStoreV4,
-
-    // Admin
     'getAdminDashboardV4':getAdminDashboardV4,
     'getAdminIssuesV4':getAdminIssuesV4,
     'getPoeIndexV4':getPoeIndexV4,
@@ -69,18 +67,10 @@ function doPost(e){
     apiV5RequireBridgeSecret_(body.bridgeSecret);
     const action=String(body.action||'');
     const args=Array.isArray(body.args)?body.args:[];
-    if(action==='prepareExternalPhotoV5'){
-      return apiV5Json_({ok:true,result:prepareExternalPhotoV5.apply(null,args)});
-    }
-    if(action==='commitExternalPhotoV5'){
-      return apiV5Json_({ok:true,result:commitExternalPhotoV5.apply(null,args)});
-    }
-    if(action==='getDriveUploadTokenV5'){
-      return apiV5Json_({ok:true,result:getDriveUploadTokenV5()});
-    }
-    if(action==='getBridgeHealthV5'){
-      return apiV5Json_({ok:true,result:getBridgeHealthV5()});
-    }
+    if(action==='prepareExternalPhotoV5')return apiV5Json_({ok:true,result:prepareExternalPhotoV5.apply(null,args)});
+    if(action==='commitExternalPhotoV5')return apiV5Json_({ok:true,result:commitExternalPhotoV5.apply(null,args)});
+    if(action==='getDriveUploadTokenV5')return apiV5Json_({ok:true,result:getDriveUploadTokenV5()});
+    if(action==='getBridgeHealthV5')return apiV5Json_({ok:true,result:getBridgeHealthV5()});
     const fn=apiV5Actions_()[action];
     if(typeof fn!=='function')throw new Error('API action is not allowed.');
     return apiV5Json_({ok:true,result:fn.apply(null,args)});
@@ -118,8 +108,9 @@ function externalPhotoExtV5_(name,mime){
 }
 
 function externalPhotoExistingByTokenV5_(storeKey,note){
+  const env=mode_();
   return rows_(V4.PHOTOS).find(x=>
-    String(x.Environment||'').toUpperCase()===mode_() &&
+    String(x.Environment||'').toUpperCase()===env &&
     String(x['Store Key']||'')===String(storeKey||'') &&
     String(x.Notes||'')===String(note||'') &&
     truth_(x.Active)
@@ -127,8 +118,8 @@ function externalPhotoExistingByTokenV5_(storeKey,note){
 }
 
 function externalPhotoFolderV5_(s){
-  let storeFolder=existingStorePhotoFolder_(s.key);
-  if(storeFolder)return storeFolder;
+  const existing=existingStorePhotoFolder_(s.key);
+  if(existing)return existing;
   const root=DriveApp.getFolderById(cfg_('POE_ROOT_FOLDER_ID')||V4.ROOT_FOLDER_ID);
   const envFolder=folder_(root,mode_());
   const teamFolder=folder_(envFolder,s.team);
@@ -139,7 +130,7 @@ function externalPhotoFolderV5_(s){
 
 function externalPhotoReserveShellV5_(folder,fileName,mime){
   const lock=LockService.getScriptLock();
-  if(!lock.tryLock(5000))throw new Error('The upload service is busy reserving this photo. Please retry.');
+  if(!lock.tryLock(2500))throw new Error('The upload service is busy reserving this photo. Please retry.');
   try{
     const matches=folder.getFilesByName(fileName);
     if(matches.hasNext())return matches.next();
@@ -149,30 +140,40 @@ function externalPhotoReserveShellV5_(folder,fileName,mime){
   }
 }
 
+function externalPhotoTypeInfoV5_(s,p){
+  const baseType=String(p.photoType||'').toUpperCase();
+  const valid=photoRequirements_(s,{}).map(x=>x.type);
+  if(valid.indexOf(baseType)<0)throw new Error('Invalid photo type.');
+  const isExtra=truth_(p.addAnother);
+  const uploadToken=String(p.uploadToken||'').trim();
+  if(!uploadToken)throw new Error('Upload session is missing. Refresh or reopen the app and try again.');
+  const suffix=uploadTokenSuffix_(uploadToken);
+  const type=isExtra?'EXTRA__'+baseType+'__'+suffix.slice(0,8):baseType;
+  const mime=String(p.mime||'').toLowerCase()||'image/jpeg';
+  const ext=externalPhotoExtV5_(p.originalName,mime);
+  const fileName=safe_(s.name)+'_'+type+'_'+suffix+'.'+ext;
+  return {baseType,isExtra,uploadToken,suffix,type,mime,fileName,note:photoUploadNote_(uploadToken)};
+}
+
 function externalPhotoDeactivateOldMainV5_(s,baseType,newFileId,u){
-  let remaining=[];
-  for(let attempt=0;attempt<2;attempt++){
-    remaining=rows_(V4.PHOTOS).filter(x=>
-      String(x.Environment||'').toUpperCase()===mode_() &&
-      String(x['Store Key']||'')===s.key &&
-      String(x['Photo Type']||'')===baseType &&
-      truth_(x.Active) &&
-      String(x['File ID']||'')!==String(newFileId||'')
-    );
-    if(!remaining.length)return true;
-    remaining.forEach(x=>{
-      try{update_(V4.PHOTOS,x._row,{Active:false,Notes:'Replaced by '+u.name+' at '+now_()})}
-      catch(err){try{log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' old row '+x._row+' cleanup attempt failed: '+String(err&&err.message?err.message:err))}catch(_){} }
-    });
-  }
-  remaining=rows_(V4.PHOTOS).filter(x=>
-    String(x.Environment||'').toUpperCase()===mode_() &&
+  const env=mode_();
+  const oldRows=rows_(V4.PHOTOS).filter(x=>
+    String(x.Environment||'').toUpperCase()===env &&
     String(x['Store Key']||'')===s.key &&
     String(x['Photo Type']||'')===baseType &&
     truth_(x.Active) &&
     String(x['File ID']||'')!==String(newFileId||'')
   );
-  return remaining.length===0;
+  let clean=true;
+  oldRows.forEach(x=>{
+    try{
+      update_(V4.PHOTOS,x._row,{Active:false,Notes:'Replaced by '+u.name+' at '+now_()});
+    }catch(err){
+      clean=false;
+      try{log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' old row '+x._row+' cleanup failed: '+String(err&&err.message?err.message:err))}catch(_){}
+    }
+  });
+  return clean;
 }
 
 function prepareExternalPhotoV5(code,p){
@@ -184,40 +185,21 @@ function prepareExternalPhotoV5(code,p){
   const poe=poeMap_()[s.key];
   if(poe&&isFinalOutcome_(poe))throw new Error('This store has a final status and its POE is read-only.');
 
-  const baseType=String(p.photoType||'').toUpperCase();
-  const valid=photoRequirements_(s,{}).map(x=>x.type);
-  if(valid.indexOf(baseType)<0)throw new Error('Invalid photo type.');
-
-  const isExtra=truth_(p.addAnother);
-  const uploadToken=String(p.uploadToken||'').trim();
-  if(!uploadToken)throw new Error('Upload session is missing. Refresh or reopen the app and try again.');
-  const note=photoUploadNote_(uploadToken);
-
-  const existing=externalPhotoExistingByTokenV5_(s.key,note);
-  if(existing){
-    return Object.assign(photoResultFromRow_(existing,baseType,isExtra),{alreadyCommitted:true});
-  }
+  const info=externalPhotoTypeInfoV5_(s,p);
+  const existing=externalPhotoExistingByTokenV5_(s.key,info.note);
+  if(existing)return Object.assign(photoResultFromRow_(existing,info.baseType,info.isExtra),{alreadyCommitted:true});
 
   const size=Number(p.size||0);
   if(size<=0)throw new Error('The selected photo is empty.');
   if(size>12*1024*1024)throw new Error('This photo is unusually large (over 12 MB). Please retake it using the normal phone camera.');
-
-  const mime=String(p.mime||'').toLowerCase();
-  if(mime&&mime.indexOf('image/')!==0&&mime!=='application/octet-stream'){
-    throw new Error('The selected file is not a supported image.');
-  }
+  if(info.mime&&info.mime.indexOf('image/')!==0&&info.mime!=='application/octet-stream')throw new Error('The selected file is not a supported image.');
 
   const folder=externalPhotoFolderV5_(s);
-  const suffix=uploadTokenSuffix_(uploadToken);
-  const type=isExtra?'EXTRA__'+baseType+'__'+suffix.slice(0,8):baseType;
-  const ext=externalPhotoExtV5_(p.originalName,mime);
-  const fileName=safe_(s.name)+'_'+type+'_'+suffix+'.'+ext;
-  const shell=externalPhotoReserveShellV5_(folder,fileName,mime||'image/jpeg');
-
+  const shell=externalPhotoReserveShellV5_(folder,info.fileName,info.mime);
   return {
     ok:true,alreadyCommitted:false,storeKey:s.key,storeName:s.name,
-    baseType:baseType,type:type,isExtra:isExtra,uploadToken:uploadToken,
-    folderId:folder.getId(),fileName:fileName,fileId:shell.getId(),mime:mime||'image/jpeg',
+    baseType:info.baseType,type:info.type,isExtra:info.isExtra,uploadToken:info.uploadToken,
+    folderId:folder.getId(),fileName:info.fileName,fileId:shell.getId(),mime:info.mime,
     maxBytes:12*1024*1024
   };
 }
@@ -231,74 +213,73 @@ function commitExternalPhotoV5(code,p){
   const poe=poeMap_()[s.key];
   if(poe&&isFinalOutcome_(poe))throw new Error('This store has a final status and its POE is read-only.');
 
-  const baseType=String(p.photoType||'').toUpperCase();
-  const valid=photoRequirements_(s,{}).map(x=>x.type);
-  if(valid.indexOf(baseType)<0)throw new Error('Invalid photo type.');
-
-  const isExtra=truth_(p.addAnother);
-  const uploadToken=String(p.uploadToken||'').trim();
-  if(!uploadToken)throw new Error('Upload session is missing.');
-  const note=photoUploadNote_(uploadToken);
-
-  let existing=externalPhotoExistingByTokenV5_(s.key,note);
+  const info=externalPhotoTypeInfoV5_(s,p);
+  let existing=externalPhotoExistingByTokenV5_(s.key,info.note);
   if(existing){
-    if(!isExtra)externalPhotoDeactivateOldMainV5_(s,baseType,String(existing['File ID']||''),u);
-    return photoResultFromRow_(existing,baseType,isExtra);
+    if(!info.isExtra)externalPhotoDeactivateOldMainV5_(s,info.baseType,String(existing['File ID']||''),u);
+    return Object.assign(photoResultFromRow_(existing,info.baseType,info.isExtra),{ok:true,alreadyCommitted:true});
   }
 
-  const expected=prepareExternalPhotoV5(code,{
-    storeKey:s.key,photoType:baseType,addAnother:isExtra,uploadToken:uploadToken,
-    originalName:p.originalName,mime:p.mime,size:p.size
-  });
-  if(expected.alreadyCommitted)return expected;
-
-  if(String(p.folderId||'')!==String(expected.folderId))throw new Error('Photo folder verification failed.');
-  if(String(p.fileName||'')!==String(expected.fileName))throw new Error('Photo filename verification failed.');
-  if(String(p.fileId||'')!==String(expected.fileId))throw new Error('Photo file reservation verification failed.');
-
   const fileId=String(p.fileId||'').trim();
+  const folderId=String(p.folderId||'').trim();
+  const fileName=String(p.fileName||'').trim();
   if(!fileId)throw new Error('Drive did not return a photo file ID.');
+  if(!folderId)throw new Error('Photo folder verification failed.');
+  if(fileName!==info.fileName)throw new Error('Photo filename verification failed.');
+
+  // Verify only the authoritative store folder and the uploaded file. We intentionally do
+  // not call prepareExternalPhotoV5() again here because that repeated Drive reservation work
+  // was causing long finalization times after the browser had already uploaded the photo.
+  const expectedFolder=externalPhotoFolderV5_(s);
+  const expectedFolderId=expectedFolder.getId();
+  if(folderId!==expectedFolderId)throw new Error('Photo folder verification failed.');
+
   const f=DriveApp.getFileById(fileId);
-  if(f.getName()!==expected.fileName)throw new Error('Uploaded photo name does not match the authorized upload.');
+  const actualName=f.getName();
+  if(actualName!==info.fileName)throw new Error('Uploaded photo name does not match the authorized upload.');
 
   let correctParent=false;
   const parents=f.getParents();
   while(parents.hasNext()){
-    if(parents.next().getId()===expected.folderId){correctParent=true;break;}
+    if(parents.next().getId()===expectedFolderId){correctParent=true;break;}
   }
   if(!correctParent)throw new Error('Uploaded photo is not in the authorized store folder.');
-  if(Number(f.getSize()||0)<=0)throw new Error('Uploaded photo is empty.');
+
+  const bytes=Number(f.getSize()||0);
+  if(bytes<=0)throw new Error('Uploaded photo is empty.');
 
   const lock=LockService.getScriptLock();
-  if(!lock.tryLock(5000))throw new Error('Photo reached Drive but the app is busy recording it. Please retry the same photo.');
-
+  if(!lock.tryLock(2000))throw new Error('Photo reached Drive but the app is busy recording it. Please retry the same photo.');
   try{
-    existing=externalPhotoExistingByTokenV5_(s.key,note);
+    existing=externalPhotoExistingByTokenV5_(s.key,info.note);
     if(existing){
-      if(!isExtra)externalPhotoDeactivateOldMainV5_(s,baseType,String(existing['File ID']||''),u);
-      return photoResultFromRow_(existing,baseType,isExtra);
+      if(!info.isExtra)externalPhotoDeactivateOldMainV5_(s,info.baseType,String(existing['File ID']||''),u);
+      return Object.assign(photoResultFromRow_(existing,info.baseType,info.isExtra),{ok:true,alreadyCommitted:true});
     }
 
+    const fileUrl=f.getUrl();
     append_(V4.PHOTOS,{
       Environment:mode_(),'Store Key':s.key,'Store Name':s.name,Team:s.team,
-      'Photo Type':expected.type,'File ID':f.getId(),'File Name':f.getName(),'File URL':f.getUrl(),
-      'Folder ID':expected.folderId,Active:true,'Uploaded At':new Date(),
-      'Uploaded By':u.name,'Guide Used':s.guide,Notes:note
+      'Photo Type':info.type,'File ID':fileId,'File Name':actualName,'File URL':fileUrl,
+      'Folder ID':expectedFolderId,Active:true,'Uploaded At':new Date(),
+      'Uploaded By':u.name,'Guide Used':s.guide,Notes:info.note
     });
 
-    if(!isExtra){
-      const clean=externalPhotoDeactivateOldMainV5_(s,baseType,f.getId(),u);
-      if(!clean)log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' has more than one active main metadata row after retry cleanup.');
+    if(!info.isExtra){
+      const clean=externalPhotoDeactivateOldMainV5_(s,info.baseType,fileId,u);
+      if(!clean){
+        try{log_(u,'PHOTO_REPLACE_WARNING',s.key,info.baseType+' old metadata cleanup incomplete; new photo remains active.')}catch(_){}
+      }
     }
 
-    log_(u,'PHOTO_V5',s.key,expected.type);
+    try{log_(u,'PHOTO_V5',s.key,info.type)}catch(_){}
     return {
-      ok:true,type:expected.type,baseType:baseType,isExtra:isExtra,
-      fileId:f.getId(),url:f.getUrl(),
-      previewUrl:'https://drive.google.com/thumbnail?id='+encodeURIComponent(f.getId())+'&sz=w1600',
-      name:f.getName(),folderId:expected.folderId,folderUrl:driveFolderUrl_(expected.folderId),
+      ok:true,type:info.type,baseType:info.baseType,isExtra:info.isExtra,
+      fileId:fileId,url:fileUrl,
+      previewUrl:'https://drive.google.com/thumbnail?id='+encodeURIComponent(fileId)+'&sz=w1600',
+      name:actualName,folderId:expectedFolderId,folderUrl:driveFolderUrl_(expectedFolderId),
       uploadedAt:now_(),duplicateRequest:false,transport:'V5_DIRECT_DRIVE_RESERVED',
-      bytes:Number(f.getSize()||0),mime:String(f.getMimeType()||p.mime||'')
+      bytes:bytes,mime:String(f.getMimeType()||info.mime||'')
     };
   }finally{
     try{lock.releaseLock()}catch(_){}
