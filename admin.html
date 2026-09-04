@@ -23,11 +23,11 @@
 </header>
 
 <main class="adminShell">
-  <section id="adminLogin" class="card adminLoginCard">
-    <h1>Admin Sign In</h1>
-    <p class="small">Use the existing SMF Admin access code.</p>
+  <section id="adminLogin" class="card adminLoginCard hidden">
+    <h1>Sign-in required</h1>
+    <p class="small">Returning to the SMF sign-in page…</p>
     <form id="adminLoginForm" class="loginRow">
-      <input id="adminCode" autocomplete="one-time-code" placeholder="SMF Admin access code" required>
+      <input id="adminCode" autocomplete="one-time-code" placeholder="SMF access code" required>
       <button id="adminLoginBtn" type="submit">Sign in</button>
     </form>
     <div id="adminLoginError" class="error"></div>
@@ -59,7 +59,9 @@
 </main>
 
 <div id="adminToast" class="toast hidden"></div>
+<script>if(!sessionStorage.getItem('smf_admin_code'))location.replace('./');</script>
 <script src="config.js"></script>
 <script src="admin.js"></script>
+<script>document.getElementById('adminLogout').addEventListener('click',()=>location.replace('./'));</script>
 </body>
 </html>
