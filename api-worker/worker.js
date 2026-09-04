@@ -18,7 +18,7 @@ function corsHeaders(request, env) {
   const allowed = String(env.ALLOWED_ORIGIN || '').trim();
   const allowOrigin = (!allowed || allowed === '*') ? '*' : (origin === allowed ? origin : '');
   const h = {
-    'Access-Control-Allow-Methods': 'POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
     'Cache-Control': 'no-store'
@@ -66,7 +66,6 @@ async function getGoogleAccessToken(env, forceFresh = false) {
   const r = await callAppsScript(env, 'getDriveUploadTokenV5', []);
   const token = String(r && r.accessToken || '');
   if (!token) throw new Error('Apps Script did not provide a Google Drive upload token.');
-  // Cache conservatively; retry once with a fresh token on Drive 401.
   cachedGoogleToken = { token, expiresAt: now + 35 * 60 * 1000 };
   return token;
 }
@@ -87,33 +86,15 @@ async function driveFetch(env, url, init = {}, retry401 = true) {
   return r;
 }
 
-function driveQueryEscape(s) {
-  return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
-
-async function findDriveFile(env, folderId, name) {
-  const q = `'${driveQueryEscape(folderId)}' in parents and name='${driveQueryEscape(name)}' and trashed=false`;
-  const url = 'https://www.googleapis.com/drive/v3/files?spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true' +
-    '&fields=files(id,name,mimeType,size,webViewLink)&pageSize=10&q=' + encodeURIComponent(q);
-  const r = await driveFetch(env, url);
+async function getDriveFile(env, fileId) {
+  const r = await driveFetch(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,size,webViewLink,parents`);
   const data = await r.json();
-  if (!r.ok) throw new Error('Could not check Google Drive for an existing upload.');
-  return (data.files || [])[0] || null;
-}
-
-async function createDriveShell(env, folderId, name, mime) {
-  const r = await driveFetch(env, 'https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,size,webViewLink', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, parents: [folderId], mimeType: mime || 'image/jpeg' })
-  });
-  const data = await r.json();
-  if (!r.ok || !data.id) throw new Error('Google Drive could not create the photo file.');
+  if (!r.ok || !data.id) throw new Error('Could not verify the reserved Google Drive photo file.');
   return data;
 }
 
 async function uploadDriveMedia(env, fileId, file, mime) {
-  const r = await driveFetch(env, `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,size,webViewLink`, {
+  const r = await driveFetch(env, `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,size,webViewLink,parents`, {
     method: 'PATCH',
     headers: { 'Content-Type': mime || file.type || 'application/octet-stream' },
     body: file.stream()
@@ -124,12 +105,14 @@ async function uploadDriveMedia(env, fileId, file, mime) {
 }
 
 async function ensureDrivePhoto(env, prep, file) {
-  // Deterministic filename lets a retry reuse a file already created by Drive.
-  let existing = await findDriveFile(env, prep.folderId, prep.fileName);
-  if (!existing) existing = await createDriveShell(env, prep.folderId, prep.fileName, prep.mime || file.type);
+  // Apps Script reserves one deterministic zero-byte Drive shell under a script lock.
+  // All retries therefore target the SAME file ID, eliminating same-name duplicate files.
+  const fileId = String(prep && prep.fileId || '');
+  if (!fileId) throw new Error('Apps Script did not reserve a Drive file for this upload.');
+  let existing = await getDriveFile(env, fileId);
   const currentSize = Number(existing.size || 0);
   if (currentSize !== Number(file.size || 0) || currentSize === 0) {
-    existing = await uploadDriveMedia(env, existing.id, file, prep.mime || file.type);
+    existing = await uploadDriveMedia(env, fileId, file, prep.mime || file.type);
   }
   return existing;
 }
@@ -160,14 +143,11 @@ async function handlePhoto(request, env) {
     size: Number(file.size || 0)
   };
 
-  // Apps Script validates user/team/store/type and authorizes the exact folder/name.
   const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p]);
   if (prep && prep.alreadyCommitted) return prep;
 
-  // Photo bytes bypass Apps Script HTML Service and go directly to Drive.
   const drive = await ensureDrivePhoto(env, prep, file);
 
-  // Apps Script re-validates everything before V4_PHOTOS is changed.
   const commitPayload = {
     ...p,
     folderId: prep.folderId,
@@ -177,12 +157,22 @@ async function handlePhoto(request, env) {
   return await callAppsScript(env, 'commitExternalPhotoV5', [code, commitPayload]);
 }
 
+async function handleHealth(request, env) {
+  const bridge = await callAppsScript(env, 'getBridgeHealthV5', []);
+  return jsonResponse(request, env, {
+    ok: true,
+    workerVersion: '5.0.1',
+    bridge
+  });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request, env) });
     try {
       assertOrigin(request, env);
       const url = new URL(request.url);
+      if (url.pathname === '/api/health' && request.method === 'GET') return await handleHealth(request, env);
       if (request.method !== 'POST') return jsonResponse(request, env, { ok: false, error: 'Method not allowed.' }, 405);
       if (url.pathname === '/api/action') {
         const result = await handleAction(request, env);
