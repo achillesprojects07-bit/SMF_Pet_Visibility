@@ -1,16 +1,38 @@
 let cachedGoogleToken = null;
 
-// v5 pilot is deliberately FIELD-only. Admin, Client, Safe Store Sync and
-// destructive/demo utilities remain available only through the existing v4.8.2 app.
+// v5 serves Field and Admin. High-risk store sync, mode switches and demo reset
+// remain intentionally excluded from the Worker allowlist during active deployment.
 const ACTION_ALLOWLIST = new Set([
+  // Shared authentication
   'loginV4',
+
+  // Field
   'getFieldHomeV4',
   'getStoreV4',
   'saveStoreV4',
   'submitStoreVisitV4',
   'submitDayV4',
   'removePhotoV4',
-  'rescheduleStoreV4'
+  'rescheduleStoreV4',
+
+  // Admin — dashboard, POE review, users, rules and correction workflow
+  'getAdminDashboardV4',
+  'getAdminIssuesV4',
+  'getPoeIndexV4',
+  'getAdminStoreV4',
+  'reopenStoreVisitV4',
+  'getUsersV4',
+  'createUserV4',
+  'setUserActiveV4',
+  'setUserTeamV4',
+  'resetUserCodeV4',
+  'getRulesV4',
+  'setStoreGuideV4',
+  'setCategoryGuideV4',
+  'getSystemV4',
+  'photoUploadHealthV4',
+  'healthV4',
+  'createOrResetClientAccessV4'
 ]);
 
 function corsHeaders(request, env) {
@@ -105,8 +127,6 @@ async function uploadDriveMedia(env, fileId, file, mime) {
 }
 
 async function ensureDrivePhoto(env, prep, file) {
-  // Apps Script reserves one deterministic zero-byte Drive shell under a script lock.
-  // All retries therefore target the SAME file ID, eliminating same-name duplicate files.
   const fileId = String(prep && prep.fileId || '');
   if (!fileId) throw new Error('Apps Script did not reserve a Drive file for this upload.');
   let existing = await getDriveFile(env, fileId);
@@ -120,7 +140,7 @@ async function ensureDrivePhoto(env, prep, file) {
 async function handleAction(request, env) {
   const body = await request.json();
   const action = String(body.action || '');
-  if (!ACTION_ALLOWLIST.has(action)) throw new Error('API action is not allowed in the v5 field pilot.');
+  if (!ACTION_ALLOWLIST.has(action)) throw new Error('API action is not allowed.');
   const args = Array.isArray(body.args) ? body.args : [];
   return await callAppsScript(env, action, args);
 }
@@ -145,25 +165,14 @@ async function handlePhoto(request, env) {
 
   const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p]);
   if (prep && prep.alreadyCommitted) return prep;
-
   const drive = await ensureDrivePhoto(env, prep, file);
-
-  const commitPayload = {
-    ...p,
-    folderId: prep.folderId,
-    fileName: prep.fileName,
-    fileId: drive.id
-  };
+  const commitPayload = { ...p, folderId: prep.folderId, fileName: prep.fileName, fileId: drive.id };
   return await callAppsScript(env, 'commitExternalPhotoV5', [code, commitPayload]);
 }
 
 async function handleHealth(request, env) {
   const bridge = await callAppsScript(env, 'getBridgeHealthV5', []);
-  return jsonResponse(request, env, {
-    ok: true,
-    workerVersion: '5.0.1',
-    bridge
-  });
+  return jsonResponse(request, env, { ok: true, workerVersion: '5.0.1', bridge });
 }
 
 export default {
