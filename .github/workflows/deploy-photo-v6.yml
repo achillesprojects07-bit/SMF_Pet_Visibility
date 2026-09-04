@@ -139,7 +139,7 @@ jobs:
           set -euo pipefail
           BASE="https://smf-pet-visibility-photo-v6.achilles-projects07.workers.dev"
           for i in 1 2 3 4 5; do
-            HEALTH=$(curl -fsS "$BASE/v6/health" || true)
+            HEALTH=$(curl -sS "$BASE/v6/health" || true)
             if echo "$HEALTH" | jq -e '.ok == true and .appsScriptPhotoPath == false and .directGoogle == true' >/dev/null 2>&1; then
               break
             fi
@@ -149,6 +149,16 @@ jobs:
             fi
             sleep 2
           done
-          READY=$(curl -fsS "$BASE/v6/ready")
-          echo "$READY" | jq -e '.ok == true and .directGoogle == true and .requiredColumnsOk == true and .createsFolders == false and .folderPattern == "LIVE / Team / Area / Store Name"' >/dev/null
+          READY_FILE=$(mktemp)
+          READY_CODE=$(curl -sS -o "$READY_FILE" -w '%{http_code}' "$BASE/v6/ready" || true)
+          READY=$(cat "$READY_FILE")
+          rm -f "$READY_FILE"
+          if [ "$READY_CODE" != "200" ]; then
+            echo "V6 readiness endpoint returned HTTP $READY_CODE: $READY"
+            exit 1
+          fi
+          if ! echo "$READY" | jq -e '.ok == true and .directGoogle == true and .requiredColumnsOk == true and .createsFolders == false and .folderPattern == "LIVE / Team / Area / Store Name"' >/dev/null 2>&1; then
+            echo "V6 readiness response did not pass deployment criteria: $READY"
+            exit 1
+          fi
           echo "V6 live readiness verified."
