@@ -24,37 +24,17 @@ function apiV5RequireBridgeSecret_(received){
 }
 
 function apiV5Actions_(){
+  // v5 pilot is intentionally FIELD-only. Admin, Client, sync and demo/reset
+  // actions remain exclusively in the existing v4.8.2 frontend.
   return {
-    'applySafeStoreSyncV4':applySafeStoreSyncV4,
-    'createOrResetClientAccessV4':createOrResetClientAccessV4,
-    'createUserV4':createUserV4,
-    'deleteUserV4':deleteUserV4,
-    'getAdminDashboardV4':getAdminDashboardV4,
-    'getAdminIssuesV4':getAdminIssuesV4,
-    'getAdminStoreV4':getAdminStoreV4,
-    'getClientDashboardV4':getClientDashboardV4,
-    'getClientStoreV4':getClientStoreV4,
-    'getFieldHomeV4':getFieldHomeV4,
-    'getPoeIndexV4':getPoeIndexV4,
-    'getStoreV4':getStoreV4,
-    'getSystemV4':getSystemV4,
-    'getUsersV4':getUsersV4,
-    'healthV4':healthV4,
     'loginV4':loginV4,
-    'photoUploadHealthV4':photoUploadHealthV4,
-    'previewStoreSyncV4':previewStoreSyncV4,
-    'removePhotoV4':removePhotoV4,
-    'reopenStoreVisitV4':reopenStoreVisitV4,
-    'rescheduleStoreV4':rescheduleStoreV4,
-    'resetDemoV4':resetDemoV4,
-    'resetUserCodeV4':resetUserCodeV4,
+    'getFieldHomeV4':getFieldHomeV4,
+    'getStoreV4':getStoreV4,
     'saveStoreV4':saveStoreV4,
-    'setModeV4':setModeV4,
-    'setStoreGuideV4':setStoreGuideV4,
-    'setUserActiveV4':setUserActiveV4,
-    'setUserTeamV4':setUserTeamV4,
+    'submitStoreVisitV4':submitStoreVisitV4,
     'submitDayV4':submitDayV4,
-    'submitStoreVisitV4':submitStoreVisitV4
+    'removePhotoV4':removePhotoV4,
+    'rescheduleStoreV4':rescheduleStoreV4
   };
 }
 
@@ -74,7 +54,7 @@ function doPost(e){
       return apiV5Json_({ok:true,result:getDriveUploadTokenV5()});
     }
     const fn=apiV5Actions_()[action];
-    if(typeof fn!=='function')throw new Error('API action is not allowed.');
+    if(typeof fn!=='function')throw new Error('API action is not allowed in the v5 field pilot.');
     return apiV5Json_({ok:true,result:fn.apply(null,args)});
   }catch(err){
     return apiV5Json_({ok:false,error:String(err&&err.message?err.message:err)});
@@ -83,7 +63,7 @@ function doPost(e){
 
 function getDriveUploadTokenV5(){
   // Called only through doPost after API_BRIDGE_SECRET validation.
-  // The web app must be deployed to execute as the Apps Script owner.
+  // Deploy the web app to execute as the existing Apps Script owner.
   return {accessToken:ScriptApp.getOAuthToken(),issuedAt:now_()};
 }
 
@@ -229,6 +209,8 @@ function commitExternalPhotoV5(code,p){
       'Uploaded By':u.name,'Guide Used':s.guide,Notes:note
     });
 
+    // Replacement is non-destructive: new row first, old active main metadata second.
+    // No physical Drive file is deleted.
     if(!isExtra){
       currentMain.forEach(x=>{
         try{
