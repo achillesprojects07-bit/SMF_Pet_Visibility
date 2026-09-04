@@ -46,28 +46,36 @@ jobs:
           node --check api-worker/worker.js
           node --check photo-v6/worker.js
 
-      - name: Verify V6 photo-upload safety invariants
+      - name: Verify live V5 photo recovery remains safe
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "PHOTO_API_BASE_URL" config.js
-          grep -q "smf_pending_photo_v6" app.js
-          grep -q "uploadId" app.js
-          grep -q "xhr.timeout" app.js
+          grep -q "smf_pending_photo_sync_v2" app.js
           grep -q "pendingSync" app.js
-          grep -q "/v6/photo/preflight" app.js
-          grep -q "/sync" app.js
-          grep -q "recoverAfterUploadInterruption" app.js
+          grep -q "preflightPhoto" app.js
+          grep -q "confirmPhoto" app.js
           grep -q "photoSlot.uploading" stability.js
           grep -q "beforeunload" stability.js
+          if grep -q "PHOTO_API_BASE_URL" config.js; then
+            echo "ERROR: V6 photo endpoint must not be exposed to live Field until V6 readiness is green."
+            exit 1
+          fi
+
+      - name: Verify staged V6 backend safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
           grep -q "METADATA_PENDING" photo-v6/worker.js
           grep -q "V6_UPLOAD:" photo-v6/worker.js
           grep -q "createsFolders:false" photo-v6/worker.js
           grep -q "Existing POE folder not found" photo-v6/worker.js
           grep -q "LIVE / Team / Area / Store Name" photo-v6/worker.js
           grep -q "appsScriptPhotoPath:false" photo-v6/worker.js
+          grep -q "/v6/ready" photo-v6/worker.js
+          grep -q "Verify Google OAuth refresh token" .github/workflows/deploy-photo-v6.yml
+          grep -q "Verify live V6 health and Google readiness" .github/workflows/deploy-photo-v6.yml
 
-      - name: Verify legacy recovery path remains intact
+      - name: Verify legacy backend recovery path remains intact
         shell: bash
         run: |
           set -euo pipefail
