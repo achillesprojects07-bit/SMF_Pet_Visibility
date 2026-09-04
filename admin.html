@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b4ea2">
+  <title>SMF Pet Visibility — Admin</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+<header class="topbar adminTopbar">
+  <a class="smfBrand" href="./" aria-label="San Miguel Foods Pet Visibility">
+    <svg class="smfLogo" viewBox="0 0 310 120" role="img" aria-label="San Miguel Foods">
+      <path d="M145 5c-25 10-40 25-48 47l20 36c0-31 11-50 39-61z" fill="#38b928"/>
+      <path d="M116 88c8-31 30-47 67-45l-8 39c-4 20-22 31-59 28z" fill="#ed1c24"/>
+      <text x="0" y="80" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">SAN MIGUEL</text>
+      <text x="68" y="116" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">FOODS</text>
+    </svg>
+    <span class="brandProgram">PET VISIBILITY</span>
+  </a>
+  <button id="adminLogout" class="secondary hidden">Sign out</button>
+</header>
+
+<main class="adminShell">
+  <section id="adminLogin" class="card adminLoginCard">
+    <h1>Admin Sign In</h1>
+    <p class="small">Use the existing SMF Admin access code.</p>
+    <form id="adminLoginForm" class="loginRow">
+      <input id="adminCode" autocomplete="one-time-code" placeholder="SMF Admin access code" required>
+      <button id="adminLoginBtn" type="submit">Sign in</button>
+    </form>
+    <div id="adminLoginError" class="error"></div>
+  </section>
+
+  <section id="adminApp" class="hidden">
+    <section class="adminWelcome card">
+      <div>
+        <h1 id="adminHello">Admin Dashboard</h1>
+        <div id="adminMeta" class="small"></div>
+      </div>
+      <button id="adminRefresh" class="secondary">Refresh</button>
+    </section>
+
+    <nav class="adminTabs card" aria-label="Admin sections">
+      <button class="adminTab active" data-tab="overview">Overview</button>
+      <button class="adminTab" data-tab="stores">Stores & POE</button>
+      <button class="adminTab" data-tab="issues">Issues</button>
+      <button class="adminTab" data-tab="users">Users</button>
+      <button class="adminTab" data-tab="system">System</button>
+    </nav>
+
+    <section id="tab_overview" class="adminPanel"></section>
+    <section id="tab_stores" class="adminPanel hidden"></section>
+    <section id="tab_issues" class="adminPanel hidden"></section>
+    <section id="tab_users" class="adminPanel hidden"></section>
+    <section id="tab_system" class="adminPanel hidden"></section>
+  </section>
+</main>
+
+<div id="adminToast" class="toast hidden"></div>
+<script src="config.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>
