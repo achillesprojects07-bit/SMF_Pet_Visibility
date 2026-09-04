@@ -7,6 +7,7 @@
   <title>SMF Pet Visibility — Client</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="admin.css">
+  <link rel="stylesheet" href="client.css">
 </head>
 <body>
 <header class="topbar adminTopbar">
@@ -21,10 +22,10 @@
   </a>
   <button id="clientLogout" class="secondary">Sign out</button>
 </header>
-<main class="adminShell">
-  <section class="card adminWelcome">
-    <div><h1>Client Dashboard</h1><div class="small">Read-only deployment status and POE</div></div>
-    <button id="clientRefresh" class="secondary">Refresh</button>
+<main class="clientShell">
+  <section class="card clientHero">
+    <div><h1>Deployment Dashboard</h1><div class="small">San Miguel Foods Pet Visibility Program</div></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="readOnlyPill">READ-ONLY CLIENT VIEW</span><button id="clientRefresh" class="secondary">Refresh</button></div>
   </section>
   <section id="clientBody"><section class="card loading">Loading deployment report…</section></section>
 </main>
