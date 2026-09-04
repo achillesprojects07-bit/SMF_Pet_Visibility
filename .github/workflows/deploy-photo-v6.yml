@@ -1,0 +1,111 @@
+name: Deploy SMF Photo V6
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "photo-v6/**"
+      - ".github/workflows/deploy-photo-v6.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: photo-v6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify required secrets
+        shell: bash
+        env:
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
+          SCRIPT_API_URL: ${{ secrets.SCRIPT_API_URL }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+        run: |
+          set -euo pipefail
+          for n in GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_PRIVATE_KEY GOOGLE_SHEET_ID POE_ROOT_FOLDER_ID SCRIPT_API_URL BRIDGE_SECRET; do
+            if [ -z "${!n:-}" ]; then
+              echo "Missing required GitHub secret: $n"
+              exit 1
+            fi
+          done
+
+      - name: Install Wrangler
+        run: npm install --global wrangler@4
+
+      - name: Find or create D1 transaction database
+        id: d1
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          NAME="smf-pet-visibility-photo-v6"
+          LIST=$(wrangler d1 list --json)
+          ID=$(node -e 'const x=JSON.parse(process.argv[1]); const r=x.find(v=>v.name===process.argv[2]); if(r) process.stdout.write(r.uuid||r.id||"")' "$LIST" "$NAME")
+          if [ -z "$ID" ]; then
+            CREATED=$(wrangler d1 create "$NAME" --json)
+            ID=$(node -e 'const x=JSON.parse(process.argv[1]); process.stdout.write(x.uuid||x.id||x.database_id||"")' "$CREATED")
+          fi
+          if [ -z "$ID" ]; then
+            echo "Could not determine D1 database ID"
+            exit 1
+          fi
+          echo "database_id=$ID" >> "$GITHUB_OUTPUT"
+
+      - name: Build runtime Wrangler config
+        shell: bash
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
+        run: |
+          cat > wrangler.runtime.toml <<EOF
+          name = "smf-pet-visibility-photo-v6"
+          main = "worker.js"
+          compatibility_date = "2026-09-04"
+          compatibility_flags = ["nodejs_compat"]
+
+          [vars]
+          ALLOWED_ORIGIN = "https://achillesprojects07-bit.github.io"
+          SMF_MODE = "LIVE"
+          GOOGLE_SHEET_ID = "$GOOGLE_SHEET_ID"
+          POE_ROOT_FOLDER_ID = "$POE_ROOT_FOLDER_ID"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "smf-pet-visibility-photo-v6"
+          database_id = "${{ steps.d1.outputs.database_id }}"
+          migrations_dir = "migrations"
+          EOF
+
+      - name: Apply D1 migrations
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler d1 migrations apply smf-pet-visibility-photo-v6 --remote --config wrangler.runtime.toml
+
+      - name: Deploy V6 photo Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: photo-v6
+          wranglerVersion: "4"
+          command: deploy --config wrangler.runtime.toml
+          secrets: |
+            GOOGLE_SERVICE_ACCOUNT_EMAIL
+            GOOGLE_PRIVATE_KEY
+            SCRIPT_API_URL
+            BRIDGE_SECRET
+        env:
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          SCRIPT_API_URL: ${{ secrets.SCRIPT_API_URL }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
