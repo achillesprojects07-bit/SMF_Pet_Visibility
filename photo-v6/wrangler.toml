@@ -1,0 +1,11 @@
+name = "smf-pet-visibility-photo-v6"
+main = "worker.js"
+compatibility_date = "2026-09-04"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ALLOWED_ORIGIN = "https://achillesprojects07-bit.github.io"
+SMF_MODE = "LIVE"
+
+# The deploy workflow injects the D1 binding and Google IDs at runtime.
+# Do not place private keys or service-account credentials in this file.
