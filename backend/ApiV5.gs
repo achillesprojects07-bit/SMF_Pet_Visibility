@@ -1,6 +1,6 @@
 /*
-SMF Field v5 API Bridge
-ADD THIS AS A NEW FILE (ApiV5.gs) TO THE EXISTING v4.8.2 APPS SCRIPT PROJECT.
+SMF v5 API Bridge
+ADD THIS AS A SEPARATE ApiV5.gs FILE TO THE EXISTING v4.8.2 APPS SCRIPT PROJECT.
 DO NOT REPLACE Code.gs. This bridge deliberately reuses the existing v4.8.2
 business logic, Store IDs, Store Keys, Sheets and Drive hierarchy.
 
@@ -24,17 +24,42 @@ function apiV5RequireBridgeSecret_(received){
 }
 
 function apiV5Actions_(){
-  // v5 pilot is intentionally FIELD-only. Admin, Client, sync and demo/reset
-  // actions remain exclusively in the existing v4.8.2 frontend.
+  // Every action below still performs its own existing v4 role authorization.
+  // High-risk Store Sync, mode switching and Demo reset are intentionally excluded.
   return {
     'loginV4':loginV4,
+
+    // Field
     'getFieldHomeV4':getFieldHomeV4,
     'getStoreV4':getStoreV4,
     'saveStoreV4':saveStoreV4,
     'submitStoreVisitV4':submitStoreVisitV4,
     'submitDayV4':submitDayV4,
     'removePhotoV4':removePhotoV4,
-    'rescheduleStoreV4':rescheduleStoreV4
+    'rescheduleStoreV4':rescheduleStoreV4,
+
+    // Client — read-only
+    'getClientDashboardV4':getClientDashboardV4,
+    'getClientStoreV4':getClientStoreV4,
+
+    // Admin
+    'getAdminDashboardV4':getAdminDashboardV4,
+    'getAdminIssuesV4':getAdminIssuesV4,
+    'getPoeIndexV4':getPoeIndexV4,
+    'getAdminStoreV4':getAdminStoreV4,
+    'reopenStoreVisitV4':reopenStoreVisitV4,
+    'getUsersV4':getUsersV4,
+    'createUserV4':createUserV4,
+    'setUserActiveV4':setUserActiveV4,
+    'setUserTeamV4':setUserTeamV4,
+    'resetUserCodeV4':resetUserCodeV4,
+    'getRulesV4':getRulesV4,
+    'setStoreGuideV4':setStoreGuideV4,
+    'setCategoryGuideV4':setCategoryGuideV4,
+    'getSystemV4':getSystemV4,
+    'photoUploadHealthV4':photoUploadHealthV4,
+    'healthV4':healthV4,
+    'createOrResetClientAccessV4':createOrResetClientAccessV4
   };
 }
 
@@ -57,7 +82,7 @@ function doPost(e){
       return apiV5Json_({ok:true,result:getBridgeHealthV5()});
     }
     const fn=apiV5Actions_()[action];
-    if(typeof fn!=='function')throw new Error('API action is not allowed in the v5 field pilot.');
+    if(typeof fn!=='function')throw new Error('API action is not allowed.');
     return apiV5Json_({ok:true,result:fn.apply(null,args)});
   }catch(err){
     return apiV5Json_({ok:false,error:String(err&&err.message?err.message:err)});
@@ -77,8 +102,6 @@ function getBridgeHealthV5(){
 }
 
 function getDriveUploadTokenV5(){
-  // Called only through doPost after API_BRIDGE_SECRET validation.
-  // Deploy the web app to execute as the existing Apps Script owner.
   return {accessToken:ScriptApp.getOAuthToken(),issuedAt:now_()};
 }
 
@@ -115,8 +138,6 @@ function externalPhotoFolderV5_(s){
 }
 
 function externalPhotoReserveShellV5_(folder,fileName,mime){
-  // The shell is tiny/zero-byte, so Apps Script never transports the photo body.
-  // A script lock makes reservation atomic: every retry receives the SAME file ID.
   const lock=LockService.getScriptLock();
   if(!lock.tryLock(5000))throw new Error('The upload service is busy reserving this photo. Please retry.');
   try{
@@ -265,8 +286,6 @@ function commitExternalPhotoV5(code,p){
       'Uploaded By':u.name,'Guide Used':s.guide,Notes:note
     });
 
-    // Replacement is non-destructive: new row first, old active main metadata second.
-    // No physical Drive file is deleted. Cleanup is retried and self-heals on token retry.
     if(!isExtra){
       const clean=externalPhotoDeactivateOldMainV5_(s,baseType,f.getId(),u);
       if(!clean)log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' has more than one active main metadata row after retry cleanup.');
