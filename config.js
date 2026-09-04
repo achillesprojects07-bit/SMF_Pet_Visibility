@@ -1,4 +1,3 @@
 window.SMF_CONFIG = {
-  // Public URL only. No credentials belong in this file.
-  API_BASE_URL: ""
+  API_BASE_URL: 'https://smf-pet-visibility-api.achilles-projects07.workers.dev'
 };
