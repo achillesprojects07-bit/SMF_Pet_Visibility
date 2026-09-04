@@ -24,9 +24,9 @@
   <button id="logoutBtn" class="secondary hidden">Sign out</button>
 </header>
 <main class="shell">
-  <section id="loginView" class="card hidden">
-    <h1>Sign-in required</h1>
-    <p class="small">Returning to the SMF sign-in page…</p>
+  <section id="loginView" class="card">
+    <h1 id="startupTitle">Opening Field workspace…</h1>
+    <p id="startupMessage" class="small">Loading your assigned stores. Please wait.</p>
     <form id="loginForm">
       <input id="codeInput" autocomplete="one-time-code" placeholder="SMF access code" required>
       <button id="loginBtn" type="submit">Sign in</button>
@@ -43,7 +43,19 @@
   </section>
 </main>
 <div id="toast" class="toast hidden"></div>
-<script>if(!sessionStorage.getItem('smf_code'))location.replace('./');</script>
+<script>
+  if(!sessionStorage.getItem('smf_code')) location.replace('./');
+  window.setTimeout(()=>{
+    const home=document.getElementById('homeView');
+    const login=document.getElementById('loginView');
+    if(home && home.classList.contains('hidden') && login && !login.classList.contains('hidden')){
+      const title=document.getElementById('startupTitle');
+      const msg=document.getElementById('startupMessage');
+      if(title) title.textContent='Still connecting…';
+      if(msg) msg.textContent='If this takes longer than expected, use Sign in below or return to the main SMF sign-in page.';
+    }
+  },12000);
+</script>
 <script src="config.js"></script>
 <script src="app.js"></script>
 <script src="field-day-filter.js"></script>
