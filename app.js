@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION='5.0.1-field-pilot';
+  const VERSION='5.0.2-field-ui';
   const API=String(window.SMF_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
   const $=id=>document.getElementById(id);
   const state={code:sessionStorage.getItem('smf_code')||'',user:null,home:null,current:null,outcome:'',uploading:new Set()};
@@ -12,6 +12,7 @@
   function show(id){['loginView','homeView','storeView'].forEach(x=>$(x).classList.toggle('hidden',x!==id))}
   function toast(msg,type='info'){const t=$('toast');t.textContent=msg;t.dataset.type=type;t.classList.remove('hidden');clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>t.classList.add('hidden'),3200)}
   function statusLabel(s){return String(s||'OPEN').toUpperCase()==='CLOSED'?'STORE CLOSED':String(s||'OPEN').toUpperCase()}
+  function statusClass(s){s=String(s||'OPEN').toUpperCase();return s==='COMPLETED'?'completed':s==='INCOMPLETE'?'incomplete':s==='REFUSED'?'refused':s==='CLOSED'?'closed':'open'}
   function requireApi(){if(!API||/YOUR-WORKER/i.test(API))throw new Error('SMF v5 API is not configured yet. Please continue using the current field app until Admin completes setup.')}
 
   async function apiHealth(){
@@ -69,12 +70,18 @@
 
   function renderHome(){
     const stores=state.home?.stores||[],days=state.home?.days||[...new Set(stores.map(s=>s.displayDay||s.day))];
-    $('days').innerHTML=days.map(day=>{
+    const firstDay=days.find(d=>(state.home?.dayStatus?.[d]?.open||0)>0)||days[0]||'';
+    const nav=`<section class="card quickNav"><div class="navGrid"><label><span>Jump to day</span><select id="dayJump">${days.map(d=>`<option value="${esc(d)}" ${d===firstDay?'selected':''}>${esc(d)}</option>`).join('')}</select></label><label><span>Jump to store</span><select id="storeJump"><option value="">Choose a store…</option></select></label></div></section>`;
+    const body=days.map(day=>{
       const rows=stores.filter(s=>(s.displayDay||s.day)===day).sort((a,b)=>(a.stop||0)-(b.stop||0)),ds=state.home?.dayStatus?.[day]||{};
-      return `<section class="card"><div class="dayHeader"><div><h2>${esc(day)}</h2><div class="small">${Number(ds.finalized||0)} of ${rows.length} visits finalized</div></div>${ds.submitted?`<span class="badge done">✓ DAY SUBMITTED</span>`:`<button class="secondary submitDay" data-day="${esc(day)}" ${Number(ds.open||0)>0?'disabled':''}>SUBMIT DAY</button>`}</div><div class="storeList">${rows.map(s=>`<button class="storeRow" data-key="${esc(s.key)}"><span class="storeText"><b>${esc(s.name)}</b><span>${esc(s.area)} • Stop ${esc(s.stop)} • ${esc(s.category)}</span></span><span class="badge ${s.finalized?'done':''}">${esc(statusLabel(s.outcome==='NOT STARTED'?'OPEN':s.outcome))}</span></button>`).join('')}</div></section>`;
+      return `<section class="card dayCard" data-day-section="${esc(day)}"><div class="dayHeader"><div><h2>${esc(day)}</h2><div class="small">${Number(ds.finalized||0)} of ${rows.length} visits finalized</div></div>${ds.submitted?`<span class="badge completed">✓ DAY SUBMITTED</span>`:`<button class="secondary submitDay" data-day="${esc(day)}" ${Number(ds.open||0)>0?'disabled':''}>SUBMIT DAY</button>`}</div><div class="storeList">${rows.map(s=>{const raw=s.outcome==='NOT STARTED'?'OPEN':s.outcome;return `<button class="storeRow" data-key="${esc(s.key)}"><span class="storeText"><b>${esc(s.name)}</b><span>${esc(s.area)} • Stop ${esc(s.stop)} • ${esc(s.category)}</span></span><span class="badge ${statusClass(raw)}">${esc(statusLabel(raw))}</span></button>`}).join('')}</div></section>`;
     }).join('')||'<div class="card">No stores assigned.</div>';
+    $('days').innerHTML=nav+body;
     document.querySelectorAll('.storeRow').forEach(b=>b.onclick=()=>openStore(b.dataset.key));
     document.querySelectorAll('.submitDay').forEach(b=>b.onclick=()=>submitDay(b.dataset.day));
+    const dayJump=$('dayJump'),storeJump=$('storeJump');
+    const fillStoreJump=day=>{const rows=stores.filter(s=>(s.displayDay||s.day)===day).sort((a,b)=>(a.stop||0)-(b.stop||0));storeJump.innerHTML='<option value="">Choose a store…</option>'+rows.map(s=>`<option value="${esc(s.key)}">${esc('Stop '+s.stop+' — '+s.name)}</option>`).join('')};
+    if(dayJump&&storeJump){fillStoreJump(dayJump.value);dayJump.onchange=()=>{fillStoreJump(dayJump.value);const section=[...document.querySelectorAll('[data-day-section]')].find(x=>x.dataset.daySection===dayJump.value);if(section)section.scrollIntoView({behavior:'smooth',block:'start'})};storeJump.onchange=()=>{if(storeJump.value)openStore(storeJump.value)}}
   }
 
   async function submitDay(day){
@@ -89,13 +96,14 @@
 
   function renderStore(){
     const r=state.current,s=r.store,p=r.poe||{},req=r.requiredPhotos||[],finalized=!!p.finalized,mats=s.materials||{},items=Object.keys(mats).filter(k=>Number(mats[k]||0)>0),photos=r.photos||{},groups=r.photoGroups||{},uploadedMain=req.filter(x=>photos[x.type]).length;
+    const storeStatus=finalized?p.outcome:'OPEN';
     $('storeBody').innerHTML=`
-      <section class="card storeHero"><div><h1>${esc(s.name)}</h1><div class="small">${esc(s.storeId||'')} • ${esc(s.team)} • ${esc(s.area)} • ${esc(s.category)}</div><p>${esc(s.address||'')}</p></div><span class="badge ${finalized?'done':''}">${esc(finalized?statusLabel(p.outcome):'OPEN')}</span></section>
+      <section class="card storeHero"><div><h1>${esc(s.name)}</h1><div class="small">${esc(s.storeId||'')} • ${esc(s.team)} • ${esc(s.area)} • ${esc(s.category)}</div><p>${esc(s.address||'')}</p></div><span class="badge ${statusClass(storeStatus)}">${esc(statusLabel(storeStatus))}</span></section>
       <section class="card"><h2>Merchandising Guide</h2><h3>${esc(r.guide?.title||'Execution Guide')}</h3><ol class="guide">${(r.guide?.steps||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ol></section>
       <section class="card"><h2>Inventory</h2><div class="small">Remaining = Beginning − Installed</div><div class="inventoryHead"><span>Item</span><span>Beginning</span><span>Installed</span><span>Remaining</span></div>${items.map(k=>{const alloc=Number(mats[k]||0),b=Object.prototype.hasOwnProperty.call(p.beginning||{},k)?Number(p.beginning[k]):alloc,i=Object.prototype.hasOwnProperty.call(p.installed||{},k)?Number(p.installed[k]):0;return `<div class="inventoryRow" data-item="${esc(k)}" data-alloc="${alloc}"><b>${esc(k)}<small>Allocated ${alloc}</small></b><input class="beg" type="number" min="0" max="${alloc}" value="${b}" ${finalized?'disabled':''}><input class="ins" type="number" min="0" value="${i}" ${finalized?'disabled':''}><input class="rem" type="number" value="${b-i}" disabled></div>`}).join('')}</section>
       <section class="card"><h2>Notes</h2><textarea id="notes" placeholder="Add store visit notes…" ${finalized?'disabled':''}>${esc(p.notes||'')}</textarea></section>
       <section class="card"><div class="sectionHead"><div><h2>POE Photos</h2><div class="small">${uploadedMain} of ${req.length} required main photos uploaded</div></div></div><div class="photoGuide">Take/choose the photo normally. Keep this page open until you see <b>✓ Uploaded</b>.</div><div class="photoGrid">${req.map(x=>photoSlot(x,photos,groups,finalized)).join('')}</div></section>
-      ${finalized?`<section class="card"><h2>Final Visit Outcome</h2><div class="finalOutcome">${esc(statusLabel(p.outcome))}</div><div class="small">${esc(p.completedBy||'')} ${esc(p.completedAt||'')}</div></section>`:`<section class="card"><h2>Final Visit Outcome</h2><div class="small">Select only after deployment, Notes and POE are ready.</div><div class="outcomes">${['COMPLETED','INCOMPLETE','REFUSED','CLOSED'].map(x=>`<button class="outcome" data-outcome="${x}">${esc(statusLabel(x))}</button>`).join('')}</div><div class="stickyActions"><button id="saveDraft" class="secondary">SAVE DRAFT</button><button id="submitVisit" disabled>SUBMIT STORE VISIT</button></div></section>`}`;
+      ${finalized?`<section class="card"><h2>Final Visit Outcome</h2><div class="finalOutcome ${statusClass(p.outcome)}">${esc(statusLabel(p.outcome))}</div><div class="small">${esc(p.completedBy||'')} ${esc(p.completedAt||'')}</div></section>`:`<section class="card"><h2>Final Visit Outcome</h2><div class="small">Select only after deployment, Notes and POE are ready.</div><div class="outcomes">${['COMPLETED','INCOMPLETE','REFUSED','CLOSED'].map(x=>`<button class="outcome ${statusClass(x)}" data-outcome="${x}">${esc(statusLabel(x))}</button>`).join('')}</div><div class="stickyActions"><button id="saveDraft" class="secondary">SAVE DRAFT</button><button id="submitVisit" disabled>SUBMIT STORE VISIT</button></div></section>`}`;
     bindInventory();
     if(!finalized){
       document.querySelectorAll('.outcome').forEach(b=>b.onclick=()=>{state.outcome=b.dataset.outcome;document.querySelectorAll('.outcome').forEach(x=>x.classList.toggle('selected',x===b));updateSubmit()});
