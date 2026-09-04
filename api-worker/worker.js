@@ -13,6 +13,15 @@ const SAFE_BRIDGE_RETRY = new Set([
   'loginV4','getFieldHomeV4','getStoreV4','getClientDashboardV4','getClientStoreV4',
   'getAdminDashboardV4','getAdminIssuesV4','getPoeIndexV4','getAdminStoreV4','getUsersV4','getRulesV4','getSystemV4','photoUploadHealthV4','healthV4'
 ]);
+const LONG_READ_ACTIONS = new Set([
+  'getFieldHomeV4','getStoreV4','getClientDashboardV4','getClientStoreV4',
+  'getAdminDashboardV4','getAdminIssuesV4','getPoeIndexV4','getAdminStoreV4','getUsersV4','getRulesV4','getSystemV4'
+]);
+const WRITE_ACTIONS = new Set([
+  'saveStoreV4','submitStoreVisitV4','submitDayV4','removePhotoV4','rescheduleStoreV4',
+  'reopenStoreVisitV4','createUserV4','setUserActiveV4','setUserTeamV4','resetUserCodeV4',
+  'setStoreGuideV4','setCategoryGuideV4','createOrResetClientAccessV4'
+]);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const te = new TextEncoder();
 
@@ -44,7 +53,13 @@ async function createDriveFile(env,folderId,fileName,mime){const r=await driveFe
 async function uploadDriveMedia(env,fileId,file,mime){const r=await driveFetch(env,`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,size,webViewLink,parents`,{method:'PATCH',headers:{'Content-Type':mime||file.type||'application/octet-stream'},body:file.stream()}),data=await r.json();if(!r.ok||!data.id)throw new Error('Google Drive did not finish saving the photo.');return data;}
 async function ensureDrivePhoto(env,prep,file){let fileId=String(prep&&prep.fileId||'');if(!fileId){if(!prep?.folderId||!prep?.fileName)throw new Error('Apps Script did not authorize a Drive folder for this upload.');const shell=await createDriveFile(env,String(prep.folderId),String(prep.fileName),prep.mime||file.type);fileId=String(shell.id||'');}
   let existing=await getDriveFile(env,fileId);const currentSize=Number(existing.size||0);if(currentSize!==Number(file.size||0)||currentSize===0)existing=await uploadDriveMedia(env,fileId,file,prep.mime||file.type);if(Number(existing.size||file.size||0)<=0)throw new Error('Google Drive did not confirm the photo bytes.');return existing;}
-async function handleAction(request,env){const body=await request.json(),action=String(body.action||'');if(!ACTION_ALLOWLIST.has(action))throw new Error('API action is not allowed.');return await callAppsScript(env,action,Array.isArray(body.args)?body.args:[]);}
+function actionBridgeOptions(action){
+  if(action==='loginV4')return {retries:0,timeoutMs:20000};
+  if(LONG_READ_ACTIONS.has(action))return {retries:0,timeoutMs:30000};
+  if(WRITE_ACTIONS.has(action))return {retries:0,timeoutMs:25000};
+  return {retries:0,timeoutMs:20000};
+}
+async function handleAction(request,env){const body=await request.json(),action=String(body.action||'');if(!ACTION_ALLOWLIST.has(action))throw new Error('API action is not allowed.');return await callAppsScript(env,action,Array.isArray(body.args)?body.args:[],actionBridgeOptions(action));}
 async function confirmPhotoMetadata(env,code,p){return await callAppsScript(env,'commitExternalPhotoFastV5',[code,p],{retries:0,timeoutMs:5000});}
 
 async function resumeKey(env){return await crypto.subtle.importKey('raw',te.encode(String(env.BRIDGE_SECRET||'')),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);}
@@ -67,6 +82,6 @@ async function handlePhoto(request,env,ctx){
   if(ctx&&ctx.waitUntil)ctx.waitUntil(backgroundConfirm(env,code,commitPayload));
   return {ok:true,pendingMetadata:true,driveVerified:true,fileId:drive.id,url:drive.webViewLink||'',name:drive.name||prep.fileName,folderId:prep.folderId,type:prep.type,baseType:prep.baseType,isExtra:prep.isExtra,bytes:Number(drive.size||file.size||0),message:'Photo is safely saved in Drive. POE record sync will continue separately.',resume};
 }
-async function handleHealth(request,env){return jsonResponse(request,env,{ok:true,workerVersion:'5.0.1',workerBuild:'5.0.6-fast-boot',bridge:{ok:true,bridge:'SMF_API_V5',version:'5.0.1',mode:'LIVE'}});}
+async function handleHealth(request,env){return jsonResponse(request,env,{ok:true,workerVersion:'5.0.1',workerBuild:'5.0.7-action-timeouts',bridge:{ok:true,bridge:'SMF_API_V5',version:'5.0.1',mode:'LIVE'}});}
 
 export default {async fetch(request,env,ctx){if(request.method==='OPTIONS')return new Response(null,{status:204,headers:corsHeaders(request,env)});try{assertOrigin(request,env);const url=new URL(request.url);if(url.pathname==='/api/health'&&request.method==='GET')return await handleHealth(request,env);if(request.method!=='POST')return jsonResponse(request,env,{ok:false,error:'Method not allowed.'},405);if(url.pathname==='/api/action')return jsonResponse(request,env,{ok:true,result:await handleAction(request,env)});if(url.pathname==='/api/photo')return jsonResponse(request,env,{ok:true,result:await handlePhoto(request,env,ctx)});if(url.pathname==='/api/photo/confirm')return jsonResponse(request,env,{ok:true,result:await handlePhotoConfirm(request,env)});return jsonResponse(request,env,{ok:false,error:'Not found.'},404);}catch(err){return jsonResponse(request,env,{ok:false,error:String(err&&err.message?err.message:err)},400);}}};
