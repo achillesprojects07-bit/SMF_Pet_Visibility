@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION='6.0.0-field-photo-v6';
+  const VERSION='6.0.1-field-photo-v6';
   const API=String(window.SMF_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
   const PHOTO_API=String(window.SMF_CONFIG?.PHOTO_API_BASE_URL||'').replace(/\/$/,'');
   const $=id=>document.getElementById(id);
@@ -58,7 +58,7 @@
     return {storeKey:state.current.store.key,beginning,installed,takeHome,notes:$('notes')?.value||'',brands:''};
   }
 
-  async function login(code){await apiHealth();const r=await apiAction('loginV4',[code]);if(!r?.user||r.user.role!=='FIELD')throw new Error('This workspace is for field-team access only.');state.code=code;state.user=r.user;sessionStorage.setItem('smf_code',code);await loadHome();ensurePhotoSession().catch(err=>console.warn('Photo V6 warm-up deferred',err))}
+  async function login(code){const r=await apiAction('loginV4',[code]);if(!r?.user||r.user.role!=='FIELD')throw new Error('This workspace is for field-team access only.');state.code=code;state.user=r.user;sessionStorage.setItem('smf_code',code);await loadHome()}
   $('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';const btn=$('loginBtn');btn.disabled=true;try{await login($('codeInput').value.trim())}catch(err){$('loginError').textContent=err.message}finally{btn.disabled=false}});
   $('logoutBtn').onclick=()=>{sessionStorage.removeItem('smf_code');try{localStorage.removeItem(PHOTO_SESSION_KEY)}catch(_){}state.code='';state.user=null;state.home=null;state.current=null;state.photoSession=null;$('logoutBtn').classList.add('hidden');show('loginView')};
   $('refreshBtn').onclick=loadHome;

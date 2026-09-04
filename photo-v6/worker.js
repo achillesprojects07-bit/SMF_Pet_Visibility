@@ -73,11 +73,27 @@ async function googleAccessToken(env){
 async function gfetch(env,url,init={}){ const token=await googleAccessToken(env); return fetch(url,{...init,headers:{...(init.headers||{}),Authorization:`Bearer ${token}`}}); }
 
 async function findFolder(env,parentId,name){ const query=`'${q(parentId)}' in parents and name='${q(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`; const r=await gfetch(env,`https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=2&fields=files(id,name)&q=${encodeURIComponent(query)}`); const d=await r.json(); if(!r.ok)throw new Error('Drive folder lookup failed.'); return d.files?.[0]||null; }
+function normFolderName(v){ return String(v||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[–—]/g,'-').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' '); }
+async function listChildFolders(env,parentId){ const query=`'${q(parentId)}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`; const r=await gfetch(env,`https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=1000&fields=files(id,name)&q=${encodeURIComponent(query)}`); const d=await r.json(); if(!r.ok)throw new Error('Drive folder lookup failed.'); return d.files||[]; }
+async function findFolderFlexible(env,parentId,candidates){
+  for(const raw of candidates){ const name=safeName(raw); if(!name)continue; const exact=await findFolder(env,parentId,name); if(exact)return exact; }
+  const kids=await listChildFolders(env,parentId), norms=candidates.map(normFolderName).filter(Boolean);
+  for(const k of kids){ const nk=normFolderName(k.name); if(norms.includes(nk))return k; }
+  return null;
+}
 async function resolveStoreFolder(env,store){
   let parent=String(env.POE_ROOT_FOLDER_ID||''); if(!parent)throw new Error('POE root folder is not configured.');
-  const levels=[String(env.SMF_MODE||'LIVE'),safeName(store.team),safeName(store.area),safeName(store.name)];
-  for(const n of levels){ const f=await findFolder(env,parent,n); if(!f)throw new Error('Existing POE folder not found: '+n+'. Upload was not started.'); parent=f.id; }
-  return parent;
+  const fixed=[String(env.SMF_MODE||'LIVE'),safeName(store.team),safeName(store.area)];
+  for(const n of fixed){ const f=await findFolderFlexible(env,parent,[n]); if(!f)throw new Error('Existing POE folder not found: '+n+'. Upload was not started.'); parent=f.id; }
+  const storeName=safeName(store.name), storeId=safeName(store.storeId);
+  const candidates=[]; if(storeId)candidates.push(storeId+' - '+storeName); candidates.push(storeName);
+  let f=await findFolderFlexible(env,parent,candidates);
+  if(!f){
+    const kids=await listChildFolders(env,parent), nn=normFolderName(storeName), ni=normFolderName(storeId);
+    f=kids.find(k=>{ const nk=normFolderName(k.name); return (ni&&nk.includes(ni)&&nk.includes(nn)) || (nn&&nk.endsWith(nn)); })||null;
+  }
+  if(!f)throw new Error('Existing POE folder not found for '+storeName+'. Upload was not started.');
+  return f.id;
 }
 async function createDriveShell(env,folderId,fileName,mime,uploadId){ const r=await gfetch(env,'https://www.googleapis.com/drive/v3/files?fields=id,name,size,mimeType,webViewLink,parents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fileName,mimeType:mime||'image/jpeg',parents:[folderId],appProperties:{smfUploadId:uploadId,smfTransport:'V6_DIRECT_OAUTH'}})}); const d=await r.json(); if(!r.ok||!d.id)throw new Error('Drive could not reserve the photo file.'); return d; }
 async function uploadDrive(env,fileId,body,mime){ const r=await gfetch(env,`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,size,mimeType,webViewLink,parents`,{method:'PATCH',headers:{'Content-Type':mime||'application/octet-stream'},body}); const d=await r.json(); if(!r.ok||!d.id||Number(d.size||0)<=0)throw new Error('Drive did not confirm the photo bytes.'); return d; }
@@ -105,7 +121,7 @@ async function readiness(env){
   const rootId=String(env.POE_ROOT_FOLDER_ID||''); if(!rootId)throw new Error('POE root folder is not configured.');
   const rr=await gfetch(env,`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(rootId)}?fields=id,name,mimeType,trashed`); const rd=await rr.json(); if(!rr.ok||rd.trashed||rd.mimeType!=='application/vnd.google-apps.folder')throw new Error('POE root folder is not available to the Google OAuth account.');
   const rows=await sheetValues(env,'V4_PHOTOS!1:1'); if(!rows.length)throw new Error('V4_PHOTOS header row is unavailable.'); const headers=rows[0].map(String); const required=['Environment','Store Key','Store Name','Team','Photo Type','File ID','File Name','File URL','Folder ID','Active','Uploaded At','Uploaded By','Guide Used','Notes']; const missing=required.filter(h=>!headers.includes(h)); if(missing.length)throw new Error('V4_PHOTOS is missing columns: '+missing.join(', '));
-  return {ok:true,service:'SMF_PHOTO_V6',version:'6.0.2-deployment-ready',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false,driveRoot:{id:rd.id,name:rd.name},sheet:'V4_PHOTOS',requiredColumnsOk:true,folderPattern:'LIVE / Team / Area / Store Name',createsFolders:false};
+  return {ok:true,service:'SMF_PHOTO_V6',version:'6.0.3-folder-compatible',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false,driveRoot:{id:rd.id,name:rd.name},sheet:'V4_PHOTOS',requiredColumnsOk:true,folderPattern:'LIVE / Team / Area / (Store ID - Store Name OR Store Name)',createsFolders:false};
 }
 
 export default { async fetch(request,env){
@@ -113,7 +129,7 @@ export default { async fetch(request,env){
   try{
     if(!env.DB)throw new Error('Photo transaction database is not configured.');
     const url=new URL(request.url), path=url.pathname;
-    if(path==='/v6/health'&&request.method==='GET')return json(request,env,{ok:true,service:'SMF_PHOTO_V6',version:'6.0.2-deployment-ready',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false});
+    if(path==='/v6/health'&&request.method==='GET')return json(request,env,{ok:true,service:'SMF_PHOTO_V6',version:'6.0.3-folder-compatible',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false});
     if(path==='/v6/ready'&&request.method==='GET')return json(request,env,await readiness(env));
     if(path==='/v6/session'&&request.method==='POST')return json(request,env,await createSession(request,env));
     if(path==='/v6/photo/preflight'&&request.method==='POST')return json(request,env,await preflight(request,env));
