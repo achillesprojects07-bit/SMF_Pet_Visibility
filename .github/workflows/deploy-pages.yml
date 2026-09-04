@@ -5,13 +5,23 @@ on:
     branches: [main]
     paths:
       - "index.html"
+      - "auth.js"
+      - "field.html"
       - "app.js"
+      - "admin.html"
+      - "admin.css"
+      - "admin.js"
+      - "client.html"
+      - "client.css"
+      - "client.js"
       - "styles.css"
+      - "brand.css"
       - "config.js"
       - "manifest.webmanifest"
       - "sw.js"
       - ".nojekyll"
       - ".github/workflows/deploy-pages.yml"
+      - ".github/workflows/stability-guard.yml"
   workflow_dispatch:
 
 permissions:
