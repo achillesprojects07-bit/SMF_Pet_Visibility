@@ -19,31 +19,22 @@
       <text x="0" y="80" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">SAN MIGUEL</text>
       <text x="68" y="116" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">FOODS</text>
     </svg>
-    <span><strong>SMF PET VISIBILITY</strong><small id="version">v5</small></span>
+    <span><strong>SMF PET VISIBILITY</strong><small>Deployment Portal</small></span>
   </a>
-  <div class="topActions"><a class="adminLink" href="admin.html">Admin</a><button id="logoutBtn" class="secondary hidden">Sign out</button></div>
 </header>
 <main class="shell">
-  <section id="loginView" class="card">
-    <h1>Field Sign In</h1>
-    <p class="small">Use your existing SMF field access code. Your Google Sheets records and existing POE stay unchanged.</p>
-    <form id="loginForm">
-      <input id="codeInput" autocomplete="one-time-code" placeholder="SMF field access code" required>
-      <button id="loginBtn" type="submit">Sign in</button>
+  <section class="card" style="max-width:640px;margin:36px auto 0">
+    <h1>Sign In</h1>
+    <p class="small">Enter your SMF access code. The system will automatically open the correct workspace for Field Team, Admin, or Client access.</p>
+    <form id="universalLoginForm">
+      <input id="universalCode" autocomplete="one-time-code" placeholder="SMF access code" required>
+      <button id="universalLoginBtn" type="submit">Sign in</button>
     </form>
-    <div id="loginError" class="error"></div>
-  </section>
-  <section id="homeView" class="hidden">
-    <section class="card"><div class="row"><div><h1 id="hello">Deployment</h1><div id="teamLine" class="small"></div></div><button id="refreshBtn" class="secondary">Refresh</button></div></section>
-    <div id="days"></div>
-  </section>
-  <section id="storeView" class="hidden">
-    <button id="backBtn" class="back">‹ Back to schedule</button>
-    <div id="storeBody"></div>
+    <div id="universalLoginStatus" class="small" style="margin-top:10px"></div>
+    <div id="universalLoginError" class="error"></div>
   </section>
 </main>
-<div id="toast" class="toast hidden"></div>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script src="auth.js"></script>
 </body>
 </html>
