@@ -181,10 +181,10 @@ jobs:
             echo "V6 readiness endpoint returned HTTP $READY_CODE: $READY"
             exit 1
           fi
-          if ! echo "$READY" | jq -e '.ok == true and .directGoogle == true and .requiredColumnsOk == true and .createsFolders == false and .folderPattern == "LIVE / Team / Area / Store Name"' >/dev/null 2>&1; then
+          if ! echo "$READY" | jq -e '.ok == true and .directGoogle == true and .requiredColumnsOk == true and .createsFolders == false and .folderPattern == "LIVE / Team / Area / (Store ID - Store Name OR Store Name)"' >/dev/null 2>&1; then
             echo "V6 readiness response did not pass deployment criteria: $READY"
             exit 1
           fi
           echo "V6 live readiness verified."
 
-# OAuth readiness rerun after GitHub credential repair on 2026-09-05
+# Flexible existing-folder resolver deploy trigger on 2026-09-05
