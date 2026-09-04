@@ -1,0 +1,59 @@
+name: Hotfix V6 folder and sign-in
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hotfix-v6-folder-login.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch V6 worker and field startup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          worker = Path('photo-v6/worker.js')
+          s = worker.read_text()
+          old = """async function findFolder(env,parentId,name){ const query=`'${q(parentId)}' in parents and name='${q(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`; const r=await gfetch(env,`https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=2&fields=files(id,name)&q=${encodeURIComponent(query)}`); const d=await r.json(); if(!r.ok)throw new Error('Drive folder lookup failed.'); return d.files?.[0]||null; }\nasync function resolveStoreFolder(env,store){\n  let parent=String(env.POE_ROOT_FOLDER_ID||''); if(!parent)throw new Error('POE root folder is not configured.');\n  const levels=[String(env.SMF_MODE||'LIVE'),safeName(store.team),safeName(store.area),safeName(store.name)];\n  for(const n of levels){ const f=await findFolder(env,parent,n); if(!f)throw new Error('Existing POE folder not found: '+n+'. Upload was not started.'); parent=f.id; }\n  return parent;\n}\n"""
+          new = """async function findFolder(env,parentId,name){ const query=`'${q(parentId)}' in parents and name='${q(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`; const r=await gfetch(env,`https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=2&fields=files(id,name)&q=${encodeURIComponent(query)}`); const d=await r.json(); if(!r.ok)throw new Error('Drive folder lookup failed.'); return d.files?.[0]||null; }\nfunction normFolderName(v){ return String(v||'').normalize('NFKD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().replace(/[–—]/g,'-').replace(/[^a-z0-9]+/g,' ').trim().replace(/\\s+/g,' '); }\nasync function listChildFolders(env,parentId){ const query=`'${q(parentId)}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`; const r=await gfetch(env,`https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=1000&fields=files(id,name)&q=${encodeURIComponent(query)}`); const d=await r.json(); if(!r.ok)throw new Error('Drive folder lookup failed.'); return d.files||[]; }\nasync function findFolderFlexible(env,parentId,candidates){\n  for(const raw of candidates){ const name=safeName(raw); if(!name)continue; const exact=await findFolder(env,parentId,name); if(exact)return exact; }\n  const kids=await listChildFolders(env,parentId), norms=candidates.map(normFolderName).filter(Boolean);\n  for(const k of kids){ const nk=normFolderName(k.name); if(norms.includes(nk))return k; }\n  return null;\n}\nasync function resolveStoreFolder(env,store){\n  let parent=String(env.POE_ROOT_FOLDER_ID||''); if(!parent)throw new Error('POE root folder is not configured.');\n  const fixed=[String(env.SMF_MODE||'LIVE'),safeName(store.team),safeName(store.area)];\n  for(const n of fixed){ const f=await findFolderFlexible(env,parent,[n]); if(!f)throw new Error('Existing POE folder not found: '+n+'. Upload was not started.'); parent=f.id; }\n  const storeName=safeName(store.name), storeId=safeName(store.storeId);\n  const candidates=[]; if(storeId)candidates.push(storeId+' - '+storeName); candidates.push(storeName);\n  let f=await findFolderFlexible(env,parent,candidates);\n  if(!f){\n    const kids=await listChildFolders(env,parent), nn=normFolderName(storeName), ni=normFolderName(storeId);\n    f=kids.find(k=>{ const nk=normFolderName(k.name); return (ni&&nk.includes(ni)&&nk.includes(nn)) || (nn&&nk.endsWith(nn)); })||null;\n  }\n  if(!f)throw new Error('Existing POE folder not found for '+storeName+'. Upload was not started.');\n  return f.id;\n}\n"""
+          if old not in s:
+              raise SystemExit('worker resolver block not found')
+          s = s.replace(old, new)
+          s = s.replace("version:'6.0.2-deployment-ready'", "version:'6.0.3-folder-compatible'", 2)
+          s = s.replace("folderPattern:'LIVE / Team / Area / Store Name'", "folderPattern:'LIVE / Team / Area / (Store ID - Store Name OR Store Name)'", 1)
+          worker.write_text(s)
+
+          app = Path('app.js')
+          a = app.read_text()
+          old_login = "async function login(code){await apiHealth();const r=await apiAction('loginV4',[code]);if(!r?.user||r.user.role!=='FIELD')throw new Error('This workspace is for field-team access only.');state.code=code;state.user=r.user;sessionStorage.setItem('smf_code',code);await loadHome();ensurePhotoSession().catch(err=>console.warn('Photo V6 warm-up deferred',err))}"
+          new_login = "async function login(code){const r=await apiAction('loginV4',[code]);if(!r?.user||r.user.role!=='FIELD')throw new Error('This workspace is for field-team access only.');state.code=code;state.user=r.user;sessionStorage.setItem('smf_code',code);await loadHome()}"
+          if old_login not in a:
+              raise SystemExit('app login block not found')
+          a = a.replace(old_login, new_login)
+          a = a.replace("const VERSION='6.0.0-field-photo-v6';", "const VERSION='6.0.1-field-photo-v6';", 1)
+          app.write_text(a)
+
+          field = Path('field.html')
+          h = field.read_text().replace('v=6.0.0','v=6.0.1')
+          field.write_text(h)
+
+          sw = Path('sw.js')
+          w = sw.read_text().replace("const CACHE='smf-v6-shell-1';","const CACHE='smf-v6-shell-2';",1)
+          sw.write_text(w)
+          PY
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          git config user.name "SMF Deployment Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add photo-v6/worker.js app.js field.html sw.js
+          git commit -m "Fix V6 existing folder matching and speed field sign-in"
+          git push
