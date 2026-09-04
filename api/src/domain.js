@@ -14,8 +14,21 @@ export async function authCode(code){
   if(!u)throw Object.assign(new Error('Access code not recognized or inactive.'),{status:401});
   const role=String(u.Role||'').toUpperCase();
   if(role!=='FIELD')throw Object.assign(new Error('v5 field pilot accepts FIELD accounts only.'),{status:403});
-  return {name:String(u['Display Name']||''),role,team:String(u['Assigned Team']||'')};
+  return {row:u._row,name:String(u['Display Name']||''),role,team:String(u['Assigned Team']||'')};
 }
+export async function validateFieldSession(user){
+  const {rows}=await sheetRows(TAB.USERS);
+  const u=rows.find(x=>Number(x._row)===Number(user?.row));
+  if(!u||!truth(u.Active)||String(u.Role||'').toUpperCase()!=='FIELD'){
+    throw Object.assign(new Error('Session is no longer authorized.'),{status:401});
+  }
+  const team=String(u['Assigned Team']||'');
+  if(team!==String(user?.team||'')){
+    throw Object.assign(new Error('Your team assignment changed. Sign in again.'),{status:401});
+  }
+  return {row:u._row,name:String(u['Display Name']||''),role:'FIELD',team};
+}
+
 export async function stores(){
   const {rows}=await sheetRows(TAB.STORES);
   return rows.filter(x=>truth(x.Active)).map(x=>({
@@ -119,10 +132,15 @@ export async function saveDraft(user,p){
 }
 function validateInventory(s,p){
   for(const [k,a0] of Object.entries(s.materials||{})){
-    const a=Number(a0||0);if(!a)continue;
-    const b=Number(p.beginning?.[k]);const i=Number(p.installed?.[k]);
-    if(!Number.isFinite(b)||!Number.isFinite(i))throw new Error(`Inventory incomplete: ${k}`);
-    if(i>b)throw new Error(`Installed exceeds Beginning for ${k}`);
+    const alloc=Number(a0||0);if(alloc<=0)continue;
+    const bv=p.beginning?.[k],iv=p.installed?.[k],rv=p.takeHome?.[k];
+    if(bv===''||bv===null||typeof bv==='undefined')throw new Error(`Enter beginning quantity for ${k}`);
+    if(iv===''||iv===null||typeof iv==='undefined')throw new Error(`Enter installed quantity for ${k}`);
+    if(rv===''||rv===null||typeof rv==='undefined')throw new Error(`Remaining quantity is missing for ${k}`);
+    const b=Number(bv),i=Number(iv),r=Number(rv);
+    if([b,i,r].some(x=>!Number.isFinite(x)||x<0))throw new Error(`Invalid quantity for ${k}`);
+    if(b>alloc)throw new Error(`${k}: Beginning cannot be greater than allocated quantity (${alloc}).`);
+    if(b!==i+r)throw new Error(`${k}: Beginning must equal Installed + Remaining.`);
   }
 }
 export async function submitStore(user,p){
