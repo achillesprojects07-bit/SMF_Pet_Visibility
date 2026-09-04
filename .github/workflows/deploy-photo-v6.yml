@@ -140,7 +140,7 @@ jobs:
           BASE="https://smf-pet-visibility-photo-v6.achilles-projects07.workers.dev"
           for i in 1 2 3 4 5; do
             HEALTH=$(curl -fsS "$BASE/v6/health" || true)
-            if [ "$(echo "$HEALTH" | jq -r '.ok // false')" = "true" ] && [ "$(echo "$HEALTH" | jq -r '.appsScriptPhotoPath // true')" = "false" ]; then
+            if echo "$HEALTH" | jq -e '.ok == true and .appsScriptPhotoPath == false and .directGoogle == true' >/dev/null 2>&1; then
               break
             fi
             if [ "$i" = "5" ]; then
