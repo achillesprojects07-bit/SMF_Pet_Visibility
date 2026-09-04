@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           required=(
-            index.html auth.js field.html app.js stability.js styles.css brand.css config.js sw.js
+            index.html auth.js field.html app.js field-day-filter.js stability.js styles.css brand.css config.js sw.js
             admin.html admin.css admin.js
             client.html client.css client.js
             backend/ApiV5.gs api-worker/worker.js
@@ -38,6 +38,7 @@ jobs:
           set -euo pipefail
           node --check auth.js
           node --check app.js
+          node --check field-day-filter.js
           node --check stability.js
           node --check admin.js
           node --check client.js
@@ -49,13 +50,29 @@ jobs:
           set -euo pipefail
           grep -q "uploadToken" app.js
           grep -q "xhr.timeout" app.js
+          grep -q "pendingSync" app.js
+          grep -q "photo/confirm" app.js
           grep -q "photoSlot.uploading" stability.js
+          grep -q "Saved.*sync" stability.js
           grep -q "beforeunload" stability.js
           grep -q "prepareExternalPhotoV5" backend/ApiV5.gs
-          grep -q "commitExternalPhotoV5" backend/ApiV5.gs
+          grep -q "commitExternalPhotoFastV5" backend/ApiV5.gs
           grep -q "alreadyCommitted" backend/ApiV5.gs
           grep -q "tryLock" backend/ApiV5.gs
           grep -q "getSize()||0)<=0" backend/ApiV5.gs
+          grep -q "authorized store folder" backend/ApiV5.gs
+          grep -q "signResume" api-worker/worker.js
+          grep -q "verifyResume" api-worker/worker.js
+          grep -q "pendingMetadata" api-worker/worker.js
+
+      - name: Verify field deployment coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'field-day-filter.js' field.html
+          grep -q 'field-day-filter.js' sw.js
+          grep -q 'stability.js' sw.js
+          grep -q 'field-day-filter.js' .github/workflows/deploy-pages.yml
 
       - name: Block destructive Drive operations in v5 code
         shell: bash
