@@ -1,18 +1,29 @@
 (() => {
   'use strict';
 
-  const VERSION='5.0.0-field-pilot';
+  const VERSION='5.0.1-field-pilot';
   const API=String(window.SMF_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
   const $=id=>document.getElementById(id);
   const state={code:sessionStorage.getItem('smf_code')||'',user:null,home:null,current:null,outcome:'',uploading:new Set()};
 
   $('version').textContent='v'+VERSION;
 
-  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]))}
   function show(id){['loginView','homeView','storeView'].forEach(x=>$(x).classList.toggle('hidden',x!==id))}
   function toast(msg,type='info'){const t=$('toast');t.textContent=msg;t.dataset.type=type;t.classList.remove('hidden');clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>t.classList.add('hidden'),3200)}
   function statusLabel(s){return String(s||'OPEN').toUpperCase()==='CLOSED'?'STORE CLOSED':String(s||'OPEN').toUpperCase()}
   function requireApi(){if(!API||/YOUR-WORKER/i.test(API))throw new Error('SMF v5 API is not configured yet. Please continue using the current field app until Admin completes setup.')}
+
+  async function apiHealth(){
+    requireApi();
+    let r;
+    try{r=await fetch(API+'/api/health',{method:'GET',cache:'no-store',credentials:'omit'})}
+    catch(_){throw new Error('SMF v5 server is unreachable. Check signal and retry.')}
+    let data={};try{data=await r.json()}catch(_){throw new Error('SMF v5 health check returned an unreadable response.')}
+    if(!r.ok||data.ok===false)throw new Error(data.error||('SMF v5 server health check failed ('+r.status+').'));
+    if(data.workerVersion!=='5.0.1'||data.bridge?.version!=='5.0.1'||data.bridge?.bridge!=='SMF_API_V5')throw new Error('SMF v5 deployment versions do not match. Admin must redeploy before field use.');
+    return data;
+  }
 
   async function apiAction(action,args=[]){
     requireApi();
@@ -34,6 +45,7 @@
   }
 
   async function login(code){
+    await apiHealth();
     const r=await apiAction('loginV4',[code]);
     if(!r?.user||r.user.role!=='FIELD')throw new Error('This v5 pilot is for field-team access only.');
     state.code=code;state.user=r.user;sessionStorage.setItem('smf_code',code);await loadHome();
@@ -106,16 +118,18 @@
 
   function photoRequestForm(type,file,addAnother,uploadToken){const f=new FormData();f.append('accessCode',state.code);f.append('storeKey',state.current.store.key);f.append('photoType',type);f.append('addAnother',addAnother?'1':'0');f.append('uploadToken',uploadToken);f.append('photoFile',file,file.name||'photo.jpg');return f}
 
-  function sendPhoto(form,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',API+'/api/photo',true);xhr.timeout=120000;xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.max(1,Math.min(99,Math.round(e.loaded*100/e.total))))};xhr.onerror=()=>reject(new Error('Network connection lost during photo upload.'));xhr.ontimeout=()=>reject(new Error('Photo upload timed out.'));xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(_){}if(xhr.status>=200&&xhr.status<300&&data.ok!==false)resolve(data.result||data);else reject(new Error(data.error||('Photo upload failed (HTTP '+xhr.status+').')))};xhr.send(form)})}
+  function sendPhoto(form,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',API+'/api/photo',true);xhr.timeout=300000;xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.max(1,Math.min(99,Math.round(e.loaded*100/e.total))))};xhr.onerror=()=>reject(new Error('Network connection lost during photo upload.'));xhr.ontimeout=()=>reject(new Error('Photo upload timed out after 5 minutes. Check signal and retry.'));xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(_){}if(xhr.status>=200&&xhr.status<300&&data.ok!==false)resolve(data.result||data);else reject(new Error(data.error||('Photo upload failed (HTTP '+xhr.status+').')))};xhr.send(form)})}
 
   async function uploadPhoto(type,file,addAnother){
     if(!file)return;requireApi();if(file.size>12*1024*1024){toast('Photo is over 12 MB. Please retake it normally.','error');return}if(state.uploading.has(type)){toast('Wait for this photo upload to finish.','error');return}
-    const uploadToken=(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random()),draft=payload(),slot=$('slot_'+type),status=$('status_'+type),bar=$('bar_'+type),queue=$('queue_'+type);state.uploading.add(type);updateSubmit();slot.classList.remove('failed');slot.classList.add('uploading');status.textContent=addAnother?'Uploading additional photo…':'Uploading…';queue.textContent='Keep the app open until ✓ Uploaded.';
+    const uploadToken=(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random()),slot=$('slot_'+type),status=$('status_'+type),bar=$('bar_'+type),queue=$('queue_'+type);state.uploading.add(type);updateSubmit();slot.classList.remove('failed');slot.classList.add('uploading');status.textContent=addAnother?'Uploading additional photo…':'Uploading…';queue.textContent='Keep the app open until ✓ Uploaded.';
     const progress=p=>{bar.style.width=p+'%';status.textContent=(addAnother?'Uploading additional photo… ':'Uploading… ')+p+'%'};
     try{
-      let r;try{r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),progress)}catch(first){queue.textContent='Connection interrupted. Retrying once with the same upload ID…';await new Promise(ok=>setTimeout(ok,1200));r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),p=>{bar.style.width=p+'%';status.textContent='Retrying… '+p+'%'})}
+      let r;try{r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),progress)}catch(first){queue.textContent='Connection interrupted. Waiting briefly, then retrying the same reserved upload…';await new Promise(ok=>setTimeout(ok,4000));r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),p=>{bar.style.width=p+'%';status.textContent='Retrying… '+p+'%'})}
       if(!r?.ok||!r.fileId)throw new Error('Server did not confirm the saved photo.');bar.style.width='100%';status.textContent='✓ Uploaded';slot.classList.remove('uploading');slot.classList.add('ok');queue.textContent='Saved to POE.';toast('Photo uploaded ✓','success');
-      apiAction('saveStoreV4',[state.code,draft]).catch(err=>console.warn('Background draft save failed',err));
+      // Save the CURRENT form values only after upload succeeds. This prevents a stale pre-upload
+      // snapshot from overwriting Notes/Inventory edits made while the photo was uploading.
+      apiAction('saveStoreV4',[state.code,payload()]).catch(err=>console.warn('Background draft save failed',err));
       if(!addAnother){state.current.photos=state.current.photos||{};state.current.photos[type]={type:r.type,url:r.url,name:r.name,fileId:r.fileId}}
     }catch(err){slot.classList.remove('uploading');slot.classList.add('failed');status.textContent='✕ NOT uploaded';queue.textContent=err.message+' Choose the photo again to retry.';bar.style.width='0%';toast('Photo NOT uploaded','error')}finally{state.uploading.delete(type);updateSubmit()}
   }
