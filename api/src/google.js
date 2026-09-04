@@ -23,7 +23,7 @@ export async function appendObject(tab,obj){
   const {headers}=await sheetRows(tab);
   if(!headers.length)throw new Error(`Missing sheet/header: ${tab}`);
   await sheets.spreadsheets.values.append({
-    spreadsheetId,range:`'${tab}'!A:A`,valueInputOption:'USER_ENTERED',insertDataOption:'INSERT_ROWS',
+    spreadsheetId,range:`'${tab}'!A1:${col(headers.length)}1`,valueInputOption:'USER_ENTERED',insertDataOption:'INSERT_ROWS',
     requestBody:{values:[headers.map(h=>Object.prototype.hasOwnProperty.call(obj,h)?obj[h]:'')]}
   });
 }
