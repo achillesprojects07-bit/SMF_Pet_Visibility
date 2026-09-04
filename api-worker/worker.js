@@ -1,6 +1,6 @@
 let cachedGoogleToken = null;
 
-// v5 serves Field and Admin. High-risk store sync, mode switches and demo reset
+// v5 serves Field, Admin and Client. High-risk store sync, mode switches and demo reset
 // remain intentionally excluded from the Worker allowlist during active deployment.
 const ACTION_ALLOWLIST = new Set([
   // Shared authentication
@@ -14,6 +14,10 @@ const ACTION_ALLOWLIST = new Set([
   'submitDayV4',
   'removePhotoV4',
   'rescheduleStoreV4',
+
+  // Client — read-only
+  'getClientDashboardV4',
+  'getClientStoreV4',
 
   // Admin — dashboard, POE review, users, rules and correction workflow
   'getAdminDashboardV4',
