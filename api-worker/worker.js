@@ -9,7 +9,7 @@ const ACTION_ALLOWLIST = new Set([
   'getRulesV4','setStoreGuideV4','setCategoryGuideV4','getSystemV4','photoUploadHealthV4','healthV4','createOrResetClientAccessV4'
 ]);
 const SAFE_BRIDGE_RETRY = new Set([
-  'getBridgeHealthV5','getDriveUploadTokenV5','prepareExternalPhotoUploadV5','prepareExternalPhotoV5','commitExternalPhotoFastV5',
+  'getBridgeHealthV5','getDriveUploadTokenV5','prepareExternalPhotoUploadV5','prepareExternalPhotoV5','commitExternalPhotoFastV5','finalizeSavedPhotoV5',
   'loginV4','getFieldHomeV4','getStoreV4','getClientDashboardV4','getClientStoreV4',
   'getAdminDashboardV4','getAdminIssuesV4','getPoeIndexV4','getAdminStoreV4','getUsersV4','getRulesV4','getSystemV4','photoUploadHealthV4','healthV4'
 ]);
@@ -97,14 +97,8 @@ async function finalizeSavedPhoto(env,code,p,fileId){
   if(prior&&prior.status==='done')return prior.result;
   await writeSyncState(token,{status:'running',startedAt:Date.now()});
   try{
-    const prep=await callAppsScript(env,'prepareExternalPhotoUploadV5',[code,p],{retries:0,timeoutMs:35000});
-    if(prep&&prep.alreadyCommitted){const done={...prep,ok:true,pendingMetadata:false};await writeSyncState(token,{status:'done',result:done,finishedAt:Date.now()});return done;}
-    const accessToken=String(prep&&prep.accessToken||'');if(accessToken)await rememberGoogleToken(accessToken,Date.now()+45*60*1000);
-    if(!prep?.folderId||!prep?.fileName)throw new Error('Store folder authorization is still pending.');
-    const moved=await moveDriveFile(env,fileId,String(prep.folderId),String(prep.fileName));
-    const commitPayload={...p,type:prep.type,folderId:prep.folderId,fileName:prep.fileName,fileId:moved.id};
-    const result=await confirmPhotoMetadata(env,code,commitPayload);
-    const done={...result,ok:true,pendingMetadata:false,fileId:moved.id,url:moved.webViewLink||result?.url||'',name:moved.name||prep.fileName,folderId:prep.folderId};
+    const result=await callAppsScript(env,'finalizeSavedPhotoV5',[code,{...p,fileId}],{retries:0,timeoutMs:60000});
+    const done={...result,ok:true,pendingMetadata:false,fileId:result?.fileId||fileId};
     await writeSyncState(token,{status:'done',result:done,finishedAt:Date.now()});
     return done;
   }catch(err){await writeSyncState(token,{status:'error',message:String(err&&err.message||err),finishedAt:Date.now()});throw err;}
@@ -122,6 +116,6 @@ async function handlePhotoConfirm(request,env){
 
 async function handlePhoto(request,env,ctx){const form=await request.formData(),file=form.get('photoFile');if(!(file instanceof File))throw new Error('No photo was received.');if(file.size<=0)throw new Error('The selected photo is empty.');if(file.size>12*1024*1024)throw new Error('This photo is over 12 MB. Please retake it using the normal phone camera.');const code=String(form.get('accessCode')||'').trim(),p={storeKey:String(form.get('storeKey')||''),photoType:String(form.get('photoType')||''),addAnother:String(form.get('addAnother')||'')==='1',uploadToken:String(form.get('uploadToken')||''),originalName:String(file.name||''),mime:String(file.type||'application/octet-stream'),size:Number(file.size||0)};const rawTicket=String(form.get('preflight')||'').trim();if(!rawTicket)throw new Error('Secure photo slot is missing. Please choose the photo again.');let ticket;try{ticket=JSON.parse(rawTicket)}catch(_){throw new Error('Photo upload preflight is unreadable.')}const signed=await verifyPreflight(env,ticket);if(String(signed.accessCode||'')!==code||String(signed.storeKey||'')!==p.storeKey||String(signed.photoType||'')!==p.photoType||String(signed.uploadToken||'')!==p.uploadToken||!!signed.addAnother!==!!p.addAnother||Number(signed.size||0)!==Number(file.size||0))throw new Error('Photo upload preflight does not match this photo.');const driveToken=await openText(env,signed.sealedDriveToken);if(!driveToken)throw new Error('Photo upload credential could not be restored.');await rememberGoogleToken(driveToken,Date.now()+30*60*1000);const fileId=String(signed.fileId||'');if(!fileId)throw new Error('Google Drive photo slot is missing.');let drive=await getDriveFile(env,fileId);if(Number(drive.size||0)!==Number(file.size||0)||Number(drive.size||0)===0)drive=await uploadDriveMedia(env,fileId,file,p.mime);if(Number(drive.size||file.size||0)<=0)throw new Error('Google Drive did not confirm the photo bytes.');const resume=await signResume(env,code,{stage:'organize',fileId:drive.id,photo:p});return {ok:true,pendingMetadata:true,driveVerified:true,fileId:drive.id,url:drive.webViewLink||'',name:drive.name||signed.tempName||'Saved photo',folderId:'',type:p.photoType,baseType:p.photoType,isExtra:!!p.addAnother,bytes:Number(drive.size||file.size||0),message:'Photo is safely saved in Drive. Store-folder placement and POE sync are finishing automatically.',resume};}
 
-async function handleHealth(request,env,ctx){if(ctx&&ctx.waitUntil)ctx.waitUntil(warmGoogleAccessToken(env));return jsonResponse(request,env,{ok:true,workerVersion:'5.0.1',workerBuild:'5.0.11-deterministic-poe-reconcile',bridge:{ok:true,bridge:'SMF_API_V5',version:'5.0.1',mode:'LIVE'}});}
+async function handleHealth(request,env,ctx){if(ctx&&ctx.waitUntil)ctx.waitUntil(warmGoogleAccessToken(env));return jsonResponse(request,env,{ok:true,workerVersion:'5.0.1',workerBuild:'5.0.12-single-apps-script-finalize',bridge:{ok:true,bridge:'SMF_API_V5',version:'5.0.1',mode:'LIVE'}});}
 
 export default {async fetch(request,env,ctx){if(request.method==='OPTIONS')return new Response(null,{status:204,headers:corsHeaders(request,env)});try{assertOrigin(request,env);const url=new URL(request.url);if(url.pathname==='/api/health'&&request.method==='GET')return await handleHealth(request,env,ctx);if(request.method!=='POST')return jsonResponse(request,env,{ok:false,error:'Method not allowed.'},405);if(url.pathname==='/api/action')return jsonResponse(request,env,{ok:true,result:await handleAction(request,env,ctx)});if(url.pathname==='/api/photo/preflight')return jsonResponse(request,env,{ok:true,result:await handlePhotoPreflight(request,env)});if(url.pathname==='/api/photo')return jsonResponse(request,env,{ok:true,result:await handlePhoto(request,env,ctx)});if(url.pathname==='/api/photo/confirm')return jsonResponse(request,env,{ok:true,result:await handlePhotoConfirm(request,env)});return jsonResponse(request,env,{ok:false,error:'Not found.'},404);}catch(err){return jsonResponse(request,env,{ok:false,error:String(err&&err.message?err.message:err)},400);}}};
