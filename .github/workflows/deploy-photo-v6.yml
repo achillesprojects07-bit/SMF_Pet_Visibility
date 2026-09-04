@@ -186,3 +186,5 @@ jobs:
             exit 1
           fi
           echo "V6 live readiness verified."
+
+# OAuth readiness rerun after GitHub credential repair on 2026-09-05
