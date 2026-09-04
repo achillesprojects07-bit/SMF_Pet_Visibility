@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b4ea2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>SMF Pet Visibility</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div><strong>SMF PET VISIBILITY</strong><small id="version">v5</small></div>
+  <button id="logoutBtn" class="secondary hidden">Sign out</button>
+</header>
+<main class="shell">
+  <section id="loginView" class="card">
+    <h1>Field Sign In</h1>
+    <p class="small">Use your existing SMF field access code. Your Google Sheets records and existing POE stay unchanged.</p>
+    <form id="loginForm">
+      <input id="codeInput" autocomplete="one-time-code" placeholder="SMF field access code" required>
+      <button id="loginBtn" type="submit">Sign in</button>
+    </form>
+    <div id="loginError" class="error"></div>
+  </section>
+  <section id="homeView" class="hidden">
+    <section class="card"><div class="row"><div><h1 id="hello">Deployment</h1><div id="teamLine" class="small"></div></div><button id="refreshBtn" class="secondary">Refresh</button></div></section>
+    <div id="days"></div>
+  </section>
+  <section id="storeView" class="hidden">
+    <button id="backBtn" class="back">‹ Back to schedule</button>
+    <div id="storeBody"></div>
+  </section>
+</main>
+<div id="toast" class="toast hidden"></div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
