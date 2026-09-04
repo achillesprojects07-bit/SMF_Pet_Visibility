@@ -8,6 +8,7 @@ on:
       - "auth.js"
       - "field.html"
       - "app.js"
+      - "field-day-filter.js"
       - "stability.js"
       - "admin.html"
       - "admin.css"
