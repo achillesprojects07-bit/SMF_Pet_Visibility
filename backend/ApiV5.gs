@@ -30,13 +30,14 @@ function doPost(e){
     if(action==='prepareExternalPhotoV5')return apiV5Json_({ok:true,result:prepareExternalPhotoV5.apply(null,args)});
     if(action==='commitExternalPhotoV5')return apiV5Json_({ok:true,result:commitExternalPhotoV5.apply(null,args)});
     if(action==='commitExternalPhotoFastV5')return apiV5Json_({ok:true,result:commitExternalPhotoFastV5.apply(null,args)});
+    if(action==='finalizeSavedPhotoV5')return apiV5Json_({ok:true,result:finalizeSavedPhotoV5.apply(null,args)});
     if(action==='getDriveUploadTokenV5')return apiV5Json_({ok:true,result:getDriveUploadTokenV5()});
     if(action==='getBridgeHealthV5')return apiV5Json_({ok:true,result:getBridgeHealthV5()});
     const fn=apiV5Actions_()[action];if(typeof fn!=='function')throw new Error('API action is not allowed.');
     return apiV5Json_({ok:true,result:fn.apply(null,args)});
   }catch(err){return apiV5Json_({ok:false,error:String(err&&err.message?err.message:err)});}
 }
-function getBridgeHealthV5(){return {ok:true,bridge:'SMF_API_V5',version:'5.0.1',build:'5.0.8-two-stage-preflight',mode:mode_(),timestamp:now_(),stores:storeRows_().length,photosSheet:!!ss_().getSheetByName(V4.PHOTOS)};}
+function getBridgeHealthV5(){return {ok:true,bridge:'SMF_API_V5',version:'5.0.1',build:'5.0.9-single-finalize',mode:mode_(),timestamp:now_(),stores:storeRows_().length,photosSheet:!!ss_().getSheetByName(V4.PHOTOS)};}
 function getDriveUploadTokenV5(){return {accessToken:ScriptApp.getOAuthToken(),issuedAt:now_()};}
 function externalPhotoExtV5_(name,mime){name=String(name||'');mime=String(mime||'').toLowerCase();const m=name.match(/\.([A-Za-z0-9]{2,5})$/);if(m)return m[1].toLowerCase();if(mime.indexOf('png')>=0)return 'png';if(mime.indexOf('webp')>=0)return 'webp';if(mime.indexOf('heic')>=0)return 'heic';if(mime.indexOf('heif')>=0)return 'heif';return 'jpg';}
 function externalPhotoFolderV5_(s){let storeFolder=existingStorePhotoFolder_(s.key);if(storeFolder)return storeFolder;const root=DriveApp.getFolderById(cfg_('POE_ROOT_FOLDER_ID')||V4.ROOT_FOLDER_ID),envFolder=folder_(root,mode_()),teamFolder=folder_(envFolder,s.team),areaFolder=folder_(teamFolder,safe_(s.area));return folder_(areaFolder,s.storeId?s.storeId+' - '+safe_(s.name):safe_(s.name));}
@@ -51,13 +52,6 @@ function apiV5StoreFolderFast_(s,info){const cache=CacheService.getScriptCache()
 function apiV5DeactivateOldMainFast_(s,baseType,newFileId,u,info){info=info||apiV5PhotoSheet_();if(info.lastRow<2)return true;const hits=info.sh.getRange(2,info.map['Store Key'],info.lastRow-1,1).createTextFinder(String(s.key)).matchEntireCell(true).findAll();hits.forEach(hit=>{const row=hit.getRow();const env=String(info.sh.getRange(row,info.map.Environment).getValue()||'').toUpperCase(),type=String(info.sh.getRange(row,info.map['Photo Type']).getValue()||''),active=info.sh.getRange(row,info.map.Active).getValue(),fid=String(info.sh.getRange(row,info.map['File ID']).getValue()||'');if(env===mode_()&&type===baseType&&truth_(active)&&fid!==String(newFileId||'')){info.sh.getRange(row,info.map.Active).setValue(false);info.sh.getRange(row,info.map.Notes).setValue('Replaced by '+u.name+' at '+now_());}});return true;}
 function externalPhotoDeactivateOldMainV5_(s,baseType,newFileId,u){return apiV5DeactivateOldMainFast_(s,baseType,newFileId,u,apiV5PhotoSheet_());}
 
-/*
- * Lightweight preflight used before the browser sends photo bytes.
- * This deliberately avoids poeMap_(), photoRequirements_() and upload-token
- * scans. Those integrity checks remain in commitExternalPhotoFastV5().
- * The Worker receives the Drive OAuth token only server-to-server and seals it
- * before returning an opaque preflight ticket to the browser.
- */
 function prepareExternalPhotoUploadV5(code,p){
   const u=auth_(code,['FIELD']);p=payload_(p);const s=store_(p.storeKey);if(s.team!==u.team)throw new Error('Store is not assigned to your team.');
   const baseType=String(p.photoType||'').toUpperCase().trim();if(!baseType)throw new Error('Photo type is missing.');
@@ -80,6 +74,26 @@ function prepareExternalPhotoV5(code,p){
   return {ok:true,alreadyCommitted:false,storeKey:s.key,storeName:s.name,team:s.team,guide:s.guide,uploadedBy:u.name,baseType:baseType,type:type,isExtra:isExtra,uploadToken:uploadToken,folderId:folder.getId(),fileName:fileName,fileId:'',mime:mime||'image/jpeg',maxBytes:12*1024*1024};
 }
 function apiV5AppendPhotoFast_(data,info){info=info||apiV5PhotoSheet_();const row=info.headers.map(h=>Object.prototype.hasOwnProperty.call(data,h)?data[h]:'');info.sh.appendRow(row);}
+
+function finalizeSavedPhotoV5(code,p){
+  const u=auth_(code,['FIELD']);p=payload_(p);const s=store_(p.storeKey);if(s.team!==u.team)throw new Error('Store is not assigned to your team.');
+  const uploadToken=String(p.uploadToken||'').trim(),baseType=String(p.photoType||'').toUpperCase().trim(),fileId=String(p.fileId||'').trim();
+  if(!uploadToken)throw new Error('Upload session is missing.');if(!baseType||baseType.length>120)throw new Error('Photo type is invalid.');if(!fileId)throw new Error('Saved Drive photo reference is missing.');
+  const isExtra=truth_(p.addAnother),note=photoUploadNote_(uploadToken),info=apiV5PhotoSheet_();let existing=apiV5FindPhotoByTokenFast_(s.key,note,info);if(existing)return photoResultFromRow_(existing,baseType,isExtra);
+  const f=DriveApp.getFileById(fileId);if(Number(f.getSize()||0)<=0)throw new Error('Saved Drive photo is empty.');
+  const folder=apiV5StoreFolderFast_(s,info),folderId=folder.getId(),suffix=uploadTokenSuffix_(uploadToken),type=isExtra?'EXTRA__'+baseType+'__'+suffix.slice(0,8):baseType,ext=externalPhotoExtV5_(p.originalName,String(p.mime||f.getMimeType()||'')),fileName=safe_(s.name)+'_'+type+'_'+suffix+'.'+ext;
+  const lock=LockService.getScriptLock();if(!lock.tryLock(5000))throw new Error('Photo is safe in Drive; POE sync is busy and will retry.');
+  try{
+    existing=apiV5FindPhotoByTokenFast_(s.key,note,info);if(existing)return photoResultFromRow_(existing,baseType,isExtra);
+    if(f.getName()!==fileName)f.setName(fileName);
+    let correctParent=false;const parents=f.getParents();while(parents.hasNext()){if(parents.next().getId()===folderId){correctParent=true;break;}}
+    if(!correctParent)f.moveTo(folder);
+    apiV5AppendPhotoFast_({Environment:mode_(),'Store Key':s.key,'Store Name':s.name,Team:s.team,'Photo Type':type,'File ID':f.getId(),'File Name':f.getName(),'File URL':f.getUrl(),'Folder ID':folderId,Active:true,'Uploaded At':new Date(),'Uploaded By':u.name,'Guide Used':s.guide,Notes:note},info);
+    if(!isExtra)apiV5DeactivateOldMainFast_(s,baseType,f.getId(),u,info);
+    return {ok:true,type:type,baseType:baseType,isExtra:isExtra,fileId:f.getId(),url:f.getUrl(),previewUrl:'https://drive.google.com/thumbnail?id='+encodeURIComponent(f.getId())+'&sz=w1600',name:f.getName(),folderId:folderId,folderUrl:driveFolderUrl_(folderId),uploadedAt:now_(),duplicateRequest:false,transport:'V5_SINGLE_FINALIZE',bytes:Number(f.getSize()||0),mime:String(f.getMimeType()||p.mime||'')};
+  }finally{try{lock.releaseLock()}catch(_){}}
+}
+
 function commitExternalPhotoFastV5(code,p){
   const u=auth_(code,['FIELD']);p=payload_(p);const s=store_(p.storeKey);if(s.team!==u.team)throw new Error('Store is not assigned to your team.');
   const poe=poeMap_()[s.key];if(poe&&isFinalOutcome_(poe))throw new Error('This store has a final status and its POE is read-only.');
