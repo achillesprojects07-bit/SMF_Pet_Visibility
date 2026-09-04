@@ -47,7 +47,7 @@ function assertOrigin(request, env) {
   if (origin !== allowed) throw new Error('Origin is not allowed.');
 }
 
-async function bridgeFetchOnce(env, action, args, timeoutMs = 18000) {
+async function bridgeFetchOnce(env, action, args, timeoutMs = 12000) {
   const url = String(env.SCRIPT_API_URL || '').trim();
   const secret = String(env.BRIDGE_SECRET || '').trim();
   if (!url || !secret) throw new Error('API bridge is not configured.');
@@ -86,8 +86,8 @@ async function bridgeFetchOnce(env, action, args, timeoutMs = 18000) {
 
 async function callAppsScript(env, action, args, options = {}) {
   const safe = SAFE_BRIDGE_RETRY.has(action);
-  const retries = Number.isInteger(options.retries) ? options.retries : (safe ? 2 : 0);
-  const timeoutMs = Number(options.timeoutMs || 18000);
+  const retries = Number.isInteger(options.retries) ? options.retries : (safe ? 1 : 0);
+  const timeoutMs = Number(options.timeoutMs || 12000);
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -95,7 +95,7 @@ async function callAppsScript(env, action, args, options = {}) {
     } catch (err) {
       lastErr = err;
       if (attempt >= retries) break;
-      await sleep(700 * (attempt + 1));
+      await sleep(500 * (attempt + 1));
     }
   }
   throw lastErr || new Error('Apps Script bridge failed.');
@@ -104,7 +104,7 @@ async function callAppsScript(env, action, args, options = {}) {
 async function getGoogleAccessToken(env, forceFresh = false) {
   const now = Date.now();
   if (!forceFresh && cachedGoogleToken && cachedGoogleToken.expiresAt > now + 60000) return cachedGoogleToken.token;
-  const r = await callAppsScript(env, 'getDriveUploadTokenV5', [], { retries: 2, timeoutMs: 15000 });
+  const r = await callAppsScript(env, 'getDriveUploadTokenV5', [], { retries: 1, timeoutMs: 10000 });
   const token = String(r && r.accessToken || '');
   if (!token) throw new Error('Apps Script did not provide a Google Drive upload token.');
   cachedGoogleToken = { token, expiresAt: now + 35 * 60 * 1000 };
@@ -158,7 +158,7 @@ async function handleAction(request, env) {
 
 async function recoverCommittedPhoto(env, code, p) {
   try {
-    const check = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p], { retries: 2, timeoutMs: 15000 });
+    const check = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p], { retries: 1, timeoutMs: 8000 });
     if (check && check.alreadyCommitted && check.fileId) return { ...check, ok: true, recovered: true };
   } catch (_) {}
   return null;
@@ -166,14 +166,14 @@ async function recoverCommittedPhoto(env, code, p) {
 
 async function commitPhotoWithRecovery(env, code, p, commitPayload) {
   let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await callAppsScript(env, 'commitExternalPhotoV5', [code, commitPayload], { retries: 0, timeoutMs: 18000 });
+      return await callAppsScript(env, 'commitExternalPhotoV5', [code, commitPayload], { retries: 0, timeoutMs: 12000 });
     } catch (err) {
       lastErr = err;
       const recovered = await recoverCommittedPhoto(env, code, p);
       if (recovered) return recovered;
-      if (attempt < 2) await sleep(900 * (attempt + 1));
+      if (attempt === 0) await sleep(700);
     }
   }
   throw lastErr || new Error('Photo reached Drive but final confirmation failed. Retry the same photo; the existing Drive file will be reused.');
@@ -197,7 +197,7 @@ async function handlePhoto(request, env) {
     size: Number(file.size || 0)
   };
 
-  const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p], { retries: 2, timeoutMs: 15000 });
+  const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p], { retries: 1, timeoutMs: 10000 });
   if (prep && prep.alreadyCommitted) return { ...prep, ok: true, recovered: true };
 
   const drive = await ensureDrivePhoto(env, prep, file);
@@ -206,8 +206,9 @@ async function handlePhoto(request, env) {
 }
 
 async function handleHealth(request, env) {
-  const bridge = await callAppsScript(env, 'getBridgeHealthV5', [], { retries: 1, timeoutMs: 12000 });
-  return jsonResponse(request, env, { ok: true, workerVersion: '5.0.2', bridge });
+  const bridge = await callAppsScript(env, 'getBridgeHealthV5', [], { retries: 1, timeoutMs: 8000 });
+  // Keep the public compatibility version at 5.0.1 because the current field UI gates on it.
+  return jsonResponse(request, env, { ok: true, workerVersion: '5.0.1', workerBuild: '5.0.2-recovery', bridge });
 }
 
 export default {
