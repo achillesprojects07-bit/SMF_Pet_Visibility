@@ -20,15 +20,16 @@ jobs:
       - name: Verify required secrets
         shell: bash
         env:
-          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
-          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
           SCRIPT_API_URL: ${{ secrets.SCRIPT_API_URL }}
           BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
         run: |
           set -euo pipefail
-          for n in GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_PRIVATE_KEY GOOGLE_SHEET_ID POE_ROOT_FOLDER_ID SCRIPT_API_URL BRIDGE_SECRET; do
+          for n in GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET GOOGLE_OAUTH_REFRESH_TOKEN GOOGLE_SHEET_ID POE_ROOT_FOLDER_ID SCRIPT_API_URL BRIDGE_SECRET; do
             if [ -z "${!n:-}" ]; then
               echo "Missing required GitHub secret: $n"
               exit 1
@@ -100,12 +101,14 @@ jobs:
           wranglerVersion: "4"
           command: deploy --config wrangler.runtime.toml
           secrets: |
-            GOOGLE_SERVICE_ACCOUNT_EMAIL
-            GOOGLE_PRIVATE_KEY
+            GOOGLE_OAUTH_CLIENT_ID
+            GOOGLE_OAUTH_CLIENT_SECRET
+            GOOGLE_OAUTH_REFRESH_TOKEN
             SCRIPT_API_URL
             BRIDGE_SECRET
         env:
-          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
-          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           SCRIPT_API_URL: ${{ secrets.SCRIPT_API_URL }}
           BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
