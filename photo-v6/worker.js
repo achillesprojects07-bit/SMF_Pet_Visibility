@@ -19,7 +19,6 @@ function json(request, env, body, status = 200) {
 function nowIso(){ return new Date().toISOString(); }
 function b64url(bytes){ let s=''; for(const b of new Uint8Array(bytes)) s+=String.fromCharCode(b); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function unb64url(s){ s=String(s||'').replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; const raw=atob(s), out=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i); return out; }
-function pemBytes(pem){ const s=String(pem||'').replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s+/g,''); if(!s)throw new Error('Google service-account private key is missing.'); return unb64url(s.replace(/\+/g,'-').replace(/\//g,'_')); }
 function q(v){ return String(v??'').replace(/'/g,"\\'"); }
 function safeName(v){ return String(v||'').replace(/[\\/:*?"<>|\r\n]+/g,' ').replace(/\s+/g,' ').trim().slice(0,180) || 'Store'; }
 function ext(name,mime){ const m=String(name||'').match(/\.([A-Za-z0-9]{2,5})$/); if(m)return m[1].toLowerCase(); mime=String(mime||'').toLowerCase(); if(mime.includes('png'))return'png'; if(mime.includes('webp'))return'webp'; if(mime.includes('heic'))return'heic'; if(mime.includes('heif'))return'heif'; return'jpg'; }
@@ -54,20 +53,29 @@ async function requireSession(request,env){
   return {sid:payload.sid,userName:String(row.user_name||''),team:String(row.team||''),stores:JSON.parse(row.store_json||'{}')};
 }
 
-async function googlePrivateKey(env){ return crypto.subtle.importKey('pkcs8', pemBytes(String(env.GOOGLE_PRIVATE_KEY||'').replace(/\\n/g,'\n')), {name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'}, false, ['sign']); }
 async function googleAccessToken(env){
   if(googleTokenCache&&googleTokenCache.exp>Date.now()+60000)return googleTokenCache.token;
-  const iat=Math.floor(Date.now()/1000), exp=iat+3300; const header=b64url(te.encode(JSON.stringify({alg:'RS256',typ:'JWT'}))); const claim=b64url(te.encode(JSON.stringify({iss:String(env.GOOGLE_SERVICE_ACCOUNT_EMAIL||''),scope:'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets',aud:'https://oauth2.googleapis.com/token',iat,exp}))); const unsigned=header+'.'+claim;
-  const sig=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',await googlePrivateKey(env),te.encode(unsigned)); const assertion=unsigned+'.'+b64url(sig);
-  const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion})}); const d=await r.json(); if(!r.ok||!d.access_token)throw new Error('Google service-account authentication failed.'); googleTokenCache={token:d.access_token,exp:Date.now()+Number(d.expires_in||3300)*1000}; return d.access_token;
+  const clientId=String(env.GOOGLE_OAUTH_CLIENT_ID||'').trim();
+  const clientSecret=String(env.GOOGLE_OAUTH_CLIENT_SECRET||'').trim();
+  const refreshToken=String(env.GOOGLE_OAUTH_REFRESH_TOKEN||'').trim();
+  if(!clientId||!clientSecret||!refreshToken)throw new Error('Google My Drive OAuth credentials are not configured.');
+  const r=await fetch('https://oauth2.googleapis.com/token',{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({client_id:clientId,client_secret:clientSecret,refresh_token:refreshToken,grant_type:'refresh_token'})
+  });
+  const d=await r.json();
+  if(!r.ok||!d.access_token)throw new Error('Google My Drive OAuth refresh failed. Re-authorize the SMF backend.');
+  googleTokenCache={token:d.access_token,exp:Date.now()+Number(d.expires_in||3300)*1000};
+  return d.access_token;
 }
 async function gfetch(env,url,init={}){ const token=await googleAccessToken(env); return fetch(url,{...init,headers:{...(init.headers||{}),Authorization:`Bearer ${token}`}}); }
 
 async function findFolder(env,parentId,name){ const query=`'${q(parentId)}' in parents and name='${q(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`; const r=await gfetch(env,`https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=2&fields=files(id,name)&q=${encodeURIComponent(query)}`); const d=await r.json(); if(!r.ok)throw new Error('Drive folder lookup failed.'); return d.files?.[0]||null; }
 async function ensureFolder(env,parentId,name){ let f=await findFolder(env,parentId,name); if(f)return f; const r=await gfetch(env,'https://www.googleapis.com/drive/v3/files?fields=id,name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,mimeType:'application/vnd.google-apps.folder',parents:[parentId]})}); const d=await r.json(); if(!r.ok||!d.id)throw new Error('Drive folder creation failed.'); return d; }
 async function resolveStoreFolder(env,store){ let parent=String(env.POE_ROOT_FOLDER_ID||''); if(!parent)throw new Error('POE root folder is not configured.'); const levels=[String(env.SMF_MODE||'LIVE'),store.team,safeName(store.area),store.storeId?safeName(store.storeId+' - '+store.name):safeName(store.name)]; for(const n of levels){ const f=await ensureFolder(env,parent,safeName(n)); parent=f.id; } return parent; }
-async function createDriveShell(env,folderId,fileName,mime,uploadId){ const r=await gfetch(env,'https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,size,mimeType,webViewLink,parents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fileName,mimeType:mime||'image/jpeg',parents:[folderId],appProperties:{smfUploadId:uploadId,smfTransport:'V6_DIRECT'}})}); const d=await r.json(); if(!r.ok||!d.id)throw new Error('Drive could not reserve the photo file.'); return d; }
-async function uploadDrive(env,fileId,body,mime){ const r=await gfetch(env,`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&supportsAllDrives=true&fields=id,name,size,mimeType,webViewLink,parents`,{method:'PATCH',headers:{'Content-Type':mime||'application/octet-stream'},body}); const d=await r.json(); if(!r.ok||!d.id||Number(d.size||0)<=0)throw new Error('Drive did not confirm the photo bytes.'); return d; }
+async function createDriveShell(env,folderId,fileName,mime,uploadId){ const r=await gfetch(env,'https://www.googleapis.com/drive/v3/files?fields=id,name,size,mimeType,webViewLink,parents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fileName,mimeType:mime||'image/jpeg',parents:[folderId],appProperties:{smfUploadId:uploadId,smfTransport:'V6_DIRECT_OAUTH'}})}); const d=await r.json(); if(!r.ok||!d.id)throw new Error('Drive could not reserve the photo file.'); return d; }
+async function uploadDrive(env,fileId,body,mime){ const r=await gfetch(env,`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,size,mimeType,webViewLink,parents`,{method:'PATCH',headers:{'Content-Type':mime||'application/octet-stream'},body}); const d=await r.json(); if(!r.ok||!d.id||Number(d.size||0)<=0)throw new Error('Drive did not confirm the photo bytes.'); return d; }
 
 async function sheetValues(env,range){ const r=await gfetch(env,`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(env.GOOGLE_SHEET_ID)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`); const d=await r.json(); if(!r.ok)throw new Error('Google Sheets read failed.'); return d.values||[]; }
 async function sheetAppend(env,range,row){ const r=await gfetch(env,`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(env.GOOGLE_SHEET_ID)}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:[row]})}); if(!r.ok)throw new Error('Google Sheets append failed.'); return r.json(); }
@@ -93,7 +101,7 @@ export default { async fetch(request,env){
   try{
     if(!env.DB)throw new Error('Photo transaction database is not configured.');
     const url=new URL(request.url), path=url.pathname;
-    if(path==='/v6/health'&&request.method==='GET')return json(request,env,{ok:true,service:'SMF_PHOTO_V6',version:'6.0.0',directGoogle:true,appsScriptPhotoPath:false});
+    if(path==='/v6/health'&&request.method==='GET')return json(request,env,{ok:true,service:'SMF_PHOTO_V6',version:'6.0.1-oauth-my-drive',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false});
     if(path==='/v6/session'&&request.method==='POST')return json(request,env,await createSession(request,env));
     if(path==='/v6/photo/preflight'&&request.method==='POST')return json(request,env,await preflight(request,env));
     let m=path.match(/^\/v6\/photo\/([^/]+)$/); if(m&&request.method==='PUT')return json(request,env,await upload(request,env,decodeURIComponent(m[1])));
