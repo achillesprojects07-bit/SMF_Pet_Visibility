@@ -46,22 +46,30 @@ jobs:
           node --check api-worker/worker.js
           node --check photo-v6/worker.js
 
-      - name: Verify live V5 photo recovery remains safe
+      - name: Verify live V6 photo recovery remains safe
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "smf_pending_photo_sync_v2" app.js
-          grep -q "pendingSync" app.js
-          grep -q "preflightPhoto" app.js
-          grep -q "confirmPhoto" app.js
+          grep -q "6.0.0-field-photo-v6" app.js
+          grep -q "smf_pending_photo_v6" app.js
+          grep -q "smf_photo_v6_session" app.js
+          grep -q "PHOTO_API_BASE_URL" config.js
+          grep -q "/v6/photo/preflight" app.js
+          grep -q "/v6/photo/" app.js
+          grep -q "/status" app.js
+          grep -q "/sync" app.js
+          grep -q "sendV6Photo" app.js
+          grep -q "recoverAfterUploadInterruption" app.js
+          grep -q "METADATA_PENDING" app.js
+          grep -q "DRIVE_SAVED" app.js
+          grep -q "the image will not be uploaded again" app.js
+          grep -q "xhr.upload.onprogress" app.js
+          grep -q "xhr.timeout=120000" app.js
           grep -q "photoSlot.uploading" stability.js
           grep -q "beforeunload" stability.js
-          if grep -q "PHOTO_API_BASE_URL" config.js; then
-            echo "ERROR: V6 photo endpoint must not be exposed to live Field until V6 readiness is green."
-            exit 1
-          fi
+          grep -q "smf-v6-shell-1" sw.js
 
-      - name: Verify staged V6 backend safety invariants
+      - name: Verify V6 backend safety invariants
         shell: bash
         run: |
           set -euo pipefail
@@ -104,7 +112,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RniE "setTrashed\(true\)|Drive\.Files\.(remove|delete)|files\.delete|\.removeFile\(" backend/ApiV5.gs api-worker/worker.js photo-v6/worker.js; then
+          if grep -RniE "setTrashed\\(true\\)|Drive\\.Files\\.(remove|delete)|files\\.delete|\\.removeFile\\(" backend/ApiV5.gs api-worker/worker.js photo-v6/worker.js; then
             echo "ERROR: destructive Google Drive operation detected in photo path."
             exit 1
           fi
