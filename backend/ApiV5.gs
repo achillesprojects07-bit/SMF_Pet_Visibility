@@ -53,12 +53,27 @@ function doPost(e){
     if(action==='getDriveUploadTokenV5'){
       return apiV5Json_({ok:true,result:getDriveUploadTokenV5()});
     }
+    if(action==='getBridgeHealthV5'){
+      return apiV5Json_({ok:true,result:getBridgeHealthV5()});
+    }
     const fn=apiV5Actions_()[action];
     if(typeof fn!=='function')throw new Error('API action is not allowed in the v5 field pilot.');
     return apiV5Json_({ok:true,result:fn.apply(null,args)});
   }catch(err){
     return apiV5Json_({ok:false,error:String(err&&err.message?err.message:err)});
   }
+}
+
+function getBridgeHealthV5(){
+  return {
+    ok:true,
+    bridge:'SMF_API_V5',
+    version:'5.0.1',
+    mode:mode_(),
+    timestamp:now_(),
+    stores:storeRows_().length,
+    photosSheet:!!ss_().getSheetByName(V4.PHOTOS)
+  };
 }
 
 function getDriveUploadTokenV5(){
@@ -99,6 +114,46 @@ function externalPhotoFolderV5_(s){
   return folder_(areaFolder,stableFolderName);
 }
 
+function externalPhotoReserveShellV5_(folder,fileName,mime){
+  // The shell is tiny/zero-byte, so Apps Script never transports the photo body.
+  // A script lock makes reservation atomic: every retry receives the SAME file ID.
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(5000))throw new Error('The upload service is busy reserving this photo. Please retry.');
+  try{
+    const matches=folder.getFilesByName(fileName);
+    if(matches.hasNext())return matches.next();
+    return folder.createFile(Utilities.newBlob('',mime||'application/octet-stream',fileName));
+  }finally{
+    try{lock.releaseLock()}catch(_){}
+  }
+}
+
+function externalPhotoDeactivateOldMainV5_(s,baseType,newFileId,u){
+  let remaining=[];
+  for(let attempt=0;attempt<2;attempt++){
+    remaining=rows_(V4.PHOTOS).filter(x=>
+      String(x.Environment||'').toUpperCase()===mode_() &&
+      String(x['Store Key']||'')===s.key &&
+      String(x['Photo Type']||'')===baseType &&
+      truth_(x.Active) &&
+      String(x['File ID']||'')!==String(newFileId||'')
+    );
+    if(!remaining.length)return true;
+    remaining.forEach(x=>{
+      try{update_(V4.PHOTOS,x._row,{Active:false,Notes:'Replaced by '+u.name+' at '+now_()})}
+      catch(err){try{log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' old row '+x._row+' cleanup attempt failed: '+String(err&&err.message?err.message:err))}catch(_){} }
+    });
+  }
+  remaining=rows_(V4.PHOTOS).filter(x=>
+    String(x.Environment||'').toUpperCase()===mode_() &&
+    String(x['Store Key']||'')===s.key &&
+    String(x['Photo Type']||'')===baseType &&
+    truth_(x.Active) &&
+    String(x['File ID']||'')!==String(newFileId||'')
+  );
+  return remaining.length===0;
+}
+
 function prepareExternalPhotoV5(code,p){
   const u=auth_(code,['FIELD']);
   p=payload_(p);
@@ -136,11 +191,12 @@ function prepareExternalPhotoV5(code,p){
   const type=isExtra?'EXTRA__'+baseType+'__'+suffix.slice(0,8):baseType;
   const ext=externalPhotoExtV5_(p.originalName,mime);
   const fileName=safe_(s.name)+'_'+type+'_'+suffix+'.'+ext;
+  const shell=externalPhotoReserveShellV5_(folder,fileName,mime||'image/jpeg');
 
   return {
     ok:true,alreadyCommitted:false,storeKey:s.key,storeName:s.name,
     baseType:baseType,type:type,isExtra:isExtra,uploadToken:uploadToken,
-    folderId:folder.getId(),fileName:fileName,mime:mime||'image/jpeg',
+    folderId:folder.getId(),fileName:fileName,fileId:shell.getId(),mime:mime||'image/jpeg',
     maxBytes:12*1024*1024
   };
 }
@@ -164,7 +220,10 @@ function commitExternalPhotoV5(code,p){
   const note=photoUploadNote_(uploadToken);
 
   let existing=externalPhotoExistingByTokenV5_(s.key,note);
-  if(existing)return photoResultFromRow_(existing,baseType,isExtra);
+  if(existing){
+    if(!isExtra)externalPhotoDeactivateOldMainV5_(s,baseType,String(existing['File ID']||''),u);
+    return photoResultFromRow_(existing,baseType,isExtra);
+  }
 
   const expected=prepareExternalPhotoV5(code,{
     storeKey:s.key,photoType:baseType,addAnother:isExtra,uploadToken:uploadToken,
@@ -174,6 +233,7 @@ function commitExternalPhotoV5(code,p){
 
   if(String(p.folderId||'')!==String(expected.folderId))throw new Error('Photo folder verification failed.');
   if(String(p.fileName||'')!==String(expected.fileName))throw new Error('Photo filename verification failed.');
+  if(String(p.fileId||'')!==String(expected.fileId))throw new Error('Photo file reservation verification failed.');
 
   const fileId=String(p.fileId||'').trim();
   if(!fileId)throw new Error('Drive did not return a photo file ID.');
@@ -193,14 +253,10 @@ function commitExternalPhotoV5(code,p){
 
   try{
     existing=externalPhotoExistingByTokenV5_(s.key,note);
-    if(existing)return photoResultFromRow_(existing,baseType,isExtra);
-
-    const currentMain=!isExtra?rows_(V4.PHOTOS).filter(x=>
-      String(x.Environment||'').toUpperCase()===mode_() &&
-      String(x['Store Key']||'')===s.key &&
-      String(x['Photo Type']||'')===baseType &&
-      truth_(x.Active)
-    ):[];
+    if(existing){
+      if(!isExtra)externalPhotoDeactivateOldMainV5_(s,baseType,String(existing['File ID']||''),u);
+      return photoResultFromRow_(existing,baseType,isExtra);
+    }
 
     append_(V4.PHOTOS,{
       Environment:mode_(),'Store Key':s.key,'Store Name':s.name,Team:s.team,
@@ -210,15 +266,10 @@ function commitExternalPhotoV5(code,p){
     });
 
     // Replacement is non-destructive: new row first, old active main metadata second.
-    // No physical Drive file is deleted.
+    // No physical Drive file is deleted. Cleanup is retried and self-heals on token retry.
     if(!isExtra){
-      currentMain.forEach(x=>{
-        try{
-          update_(V4.PHOTOS,x._row,{Active:false,Notes:'Replaced by '+u.name+' at '+now_()});
-        }catch(err){
-          try{log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' old row '+x._row+' could not be deactivated: '+String(err&&err.message?err.message:err))}catch(_){}
-        }
-      });
+      const clean=externalPhotoDeactivateOldMainV5_(s,baseType,f.getId(),u);
+      if(!clean)log_(u,'PHOTO_REPLACE_WARNING',s.key,baseType+' has more than one active main metadata row after retry cleanup.');
     }
 
     log_(u,'PHOTO_V5',s.key,expected.type);
@@ -227,7 +278,7 @@ function commitExternalPhotoV5(code,p){
       fileId:f.getId(),url:f.getUrl(),
       previewUrl:'https://drive.google.com/thumbnail?id='+encodeURIComponent(f.getId())+'&sz=w1600',
       name:f.getName(),folderId:expected.folderId,folderUrl:driveFolderUrl_(expected.folderId),
-      uploadedAt:now_(),duplicateRequest:false,transport:'V5_DIRECT_DRIVE',
+      uploadedAt:now_(),duplicateRequest:false,transport:'V5_DIRECT_DRIVE_RESERVED',
       bytes:Number(f.getSize()||0),mime:String(f.getMimeType()||p.mime||'')
     };
   }finally{
