@@ -10,9 +10,17 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="topbar">
-  <div><strong>SMF PET VISIBILITY</strong><small id="version">v5</small></div>
-  <button id="logoutBtn" class="secondary hidden">Sign out</button>
+<header class="topbar brandedTopbar">
+  <a class="fieldBrand" href="./" aria-label="San Miguel Foods Pet Visibility">
+    <svg class="fieldLogo" viewBox="0 0 310 120" role="img" aria-label="San Miguel Foods">
+      <path d="M145 5c-25 10-40 25-48 47l20 36c0-31 11-50 39-61z" fill="#38b928"/>
+      <path d="M116 88c8-31 30-47 67-45l-8 39c-4 20-22 31-59 28z" fill="#ed1c24"/>
+      <text x="0" y="80" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">SAN MIGUEL</text>
+      <text x="68" y="116" font-family="Arial Black,Arial,sans-serif" font-size="38" font-weight="900" fill="#0754bd">FOODS</text>
+    </svg>
+    <span><strong>SMF PET VISIBILITY</strong><small id="version">v5</small></span>
+  </a>
+  <div class="topActions"><a class="adminLink" href="admin.html">Admin</a><button id="logoutBtn" class="secondary hidden">Sign out</button></div>
 </header>
 <main class="shell">
   <section id="loginView" class="card">
