@@ -1,24 +1,6 @@
-# SMF Pet Visibility — v5 Field Pilot
+# SMF Pet Visibility — v5
 
-This repository contains the **new field frontend and upload API** for the SMF Pet Visibility deployment app.
-
-## Preservation rule
-
-**v5 does not migrate, clear, rebuild, rename, or replace the existing Google Sheets/Drive data.**
-
-The existing Google backend remains the system of record:
-
-- `V4_STORES`
-- `V4_POE`
-- `V4_PHOTOS`
-- `V4_ACTIVITY`
-- `V4_USERS`
-- `V4_CONFIG`
-- `V4_MERCH_RULES`
-
-Existing **Store ID**, **Store Key**, POE rows, inventory, notes, photo metadata, and Drive folders remain unchanged.
-
-The current Apps Script v4.8.2 app can remain live as the fallback while v5 is piloted.
+Production architecture for the **SMF PET VISIBILITY DEPLOYMENT APP**.
 
 ## Architecture
 
@@ -26,33 +8,59 @@ The current Apps Script v4.8.2 app can remain live as the fallback while v5 is p
 Field phone
    |
    v
-GitHub Pages PWA
+GitHub Pages frontend
    |
-   | HTTPS / multipart file upload
    v
-Cloud Run API (stateless)
-   |                    \
-   | Sheets API          \ Drive API
-   v                      v
-Existing Google Sheet    Existing POE Drive folders
+Cloudflare Worker API
+   |--------------------------|
+   v                          v
+Apps Script v4.8.2 logic      Google Drive photo upload
+   |                          ^
+   |                          |
+   +-- short-lived Drive OAuth token (same Apps Script owner)
+   |
+   v
+Google Sheets
 ```
 
-### Why this fixes the weak upload path
+## Data-preservation rule
 
-The photo is sent as a **binary multipart file**, not a base64 string and not through Apps Script HTML Service.
+**No data migration is required.** v5 deliberately reuses the current v4.8.2 Google backend.
 
-The API authenticates against existing `V4_USERS`, preserves Store ID/Store Key, reuses existing photo folders, and writes into the existing `V4_POE` / `V4_PHOTOS` tables.
+- Google Sheets remains the system of record.
+- Google Drive remains the POE repository.
+- Existing Store IDs and Store Keys are unchanged.
+- Existing V4_POE and V4_PHOTOS rows are unchanged.
+- Existing Drive folders and files are unchanged.
+- Safe Store Sync remains in the current Apps Script backend.
+- The Worker never writes directly to Sheets.
+- The Worker does not require a service account or a second Google Drive owner.
+- The Worker uploads photo bytes to the exact folder authorized by Apps Script.
+- Apps Script performs the V4_PHOTOS metadata commit and replacement rules.
 
-Physical Drive files are **never deleted** by photo replacement.
+Do **not** run Store Sync just to move to v5.
 
-## Safe pilot
+## Why v5 fixes the upload architecture
 
-v5 is intentionally **field-only first**. Admin and Client can continue using v4.8.2 during the pilot because both versions use the same Google backend.
+The old field app sent photo data through Apps Script HTML Service. v5 changes the critical path to:
 
-## Security
+```text
+Phone File/Blob -> HTTPS Worker -> Google Drive
+                            |
+                            -> Apps Script validates + commits V4_PHOTOS metadata
+```
 
-This repository must contain **no access codes, spreadsheet IDs, Drive IDs, OAuth refresh tokens, client secrets, or session secrets**.
+The browser gets real upload progress and can retry the same logical upload. The upload token creates a deterministic Drive filename, so a retry reuses the same file if Drive already received it.
 
-All sensitive values belong in Cloud Run environment variables / Secret Manager.
+## Files
 
-> Note: this repository is currently public. Do not commit production IDs or secrets.
+- `index.html` — full field/admin/client frontend migrated from v4.8.2.
+- `config.js` — public API URL only; contains no secret.
+- `api-worker/worker.js` — API proxy and direct Google Drive upload using a short-lived token issued by the existing Apps Script owner.
+- `backend/ApiV5.gs` — additive Apps Script bridge. Add it to the existing v4.8.2 project; do not replace Code.gs.
+- `DATA_PRESERVATION.md` — preservation contract and rollout safeguards.
+- `DEPLOYMENT.md` — exact deployment steps.
+
+## Current state
+
+The code is prepared for deployment. It will intentionally show “API is not configured” until the Worker URL is placed in `config.js`.
