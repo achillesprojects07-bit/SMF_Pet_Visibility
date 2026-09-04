@@ -1,0 +1,32 @@
+name: Provision SMF POE Folders
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'photo-v6/provision-folders.mjs'
+      - '.github/workflows/provision-poe-folders.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Provision only missing team, area, and store folders
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
+        run: node photo-v6/provision-folders.mjs
+
+      - name: Preservation statement
+        run: |
+          echo 'Provisioning is idempotent and creates only missing folders.'
+          echo 'It does not rename, move, overwrite, or delete existing Drive folders/files.'
