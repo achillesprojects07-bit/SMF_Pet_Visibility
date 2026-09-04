@@ -1,5 +1,5 @@
-const CACHE='smf-v5-shell-6';
-const SHELL=['./','./index.html','./styles.css','./brand.css','./app.js','./config.js','./manifest.webmanifest','./admin.html','./admin.css','./admin.js'];
+const CACHE='smf-v5-shell-7';
+const SHELL=['./','./index.html','./auth.js','./field.html','./styles.css','./brand.css','./app.js','./config.js','./manifest.webmanifest','./admin.html','./admin.css','./admin.js','./client.html','./client.js'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{
