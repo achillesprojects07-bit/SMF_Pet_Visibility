@@ -1,0 +1,29 @@
+name: Deploy SMF API Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "api-worker/**"
+      - ".github/workflows/deploy-worker.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: api-worker
+          secrets: |
+            SCRIPT_API_URL
+            BRIDGE_SECRET
+        env:
+          SCRIPT_API_URL: ${{ secrets.SCRIPT_API_URL }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
