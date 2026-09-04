@@ -1,9 +1,10 @@
 (() => {
   'use strict';
 
-  const VERSION='5.0.3-field-ui';
+  const VERSION='5.0.4-field-ui';
   const API=String(window.SMF_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
   const $=id=>document.getElementById(id);
+  const PENDING_KEY='smf_pending_photo_sync_v2';
   const state={code:sessionStorage.getItem('smf_code')||'',user:null,home:null,current:null,outcome:'',uploading:new Set(),pendingSync:new Set()};
 
   $('version').textContent='v'+VERSION;
@@ -14,6 +15,10 @@
   function statusLabel(s){return String(s||'OPEN').toUpperCase()==='CLOSED'?'STORE CLOSED':String(s||'OPEN').toUpperCase()}
   function statusClass(s){s=String(s||'OPEN').toUpperCase();return s==='COMPLETED'?'completed':s==='INCOMPLETE'?'incomplete':s==='REFUSED'?'refused':s==='CLOSED'?'closed':'open'}
   function requireApi(){if(!API||/YOUR-WORKER/i.test(API))throw new Error('SMF v5 API is not configured yet. Please continue using the current field app until Admin completes setup.')}
+  function pendingRows(){try{const v=JSON.parse(localStorage.getItem(PENDING_KEY)||'[]');return Array.isArray(v)?v:[]}catch(_){return []}}
+  function writePendingRows(rows){try{localStorage.setItem(PENDING_KEY,JSON.stringify(rows.slice(-30)))}catch(_){}}
+  function savePending(rec){const rows=pendingRows().filter(x=>!(x.code===rec.code&&x.storeKey===rec.storeKey&&x.type===rec.type));rows.push(rec);writePendingRows(rows)}
+  function removePending(rec){writePendingRows(pendingRows().filter(x=>!(x.code===rec.code&&x.storeKey===rec.storeKey&&x.type===rec.type)))}
 
   async function apiHealth(){
     requireApi();let r;
@@ -42,7 +47,7 @@
   $('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';const btn=$('loginBtn');btn.disabled=true;try{await login($('codeInput').value.trim())}catch(err){$('loginError').textContent=err.message}finally{btn.disabled=false}});
   $('logoutBtn').onclick=()=>{sessionStorage.removeItem('smf_code');state.code='';state.user=null;state.home=null;state.current=null;$('logoutBtn').classList.add('hidden');show('loginView')};
   $('refreshBtn').onclick=loadHome;
-  $('backBtn').onclick=()=>{state.current=null;show('homeView');renderHome()};
+  $('backBtn').onclick=()=>{if(state.uploading.size||state.pendingSync.size){toast('Please wait for the current photo to finish saving/syncing.','error');return}state.current=null;show('homeView');renderHome()};
 
   async function loadHome(){
     try{const r=await apiAction('getFieldHomeV4',[state.code]);state.home=r;state.user={...(state.user||{}),name:r.user?.name,team:r.user?.team,role:'FIELD'};$('hello').textContent='Hello, '+(r.user?.name||'Field Team');$('teamLine').textContent=(r.user?.team||'')+' • '+r.mode;$('logoutBtn').classList.remove('hidden');show('homeView');renderHome()}
@@ -60,7 +65,7 @@
   }
 
   async function submitDay(day){if(!confirm('Submit '+day+'? This confirms every store visit for this day is finalized.'))return;try{await apiAction('submitDayV4',[state.code,day]);toast('Deployment day submitted ✓','success');await loadHome()}catch(err){toast(err.message,'error')}}
-  async function openStore(key){show('storeView');$('storeBody').innerHTML='<div class="card loading">Loading store…</div>';try{state.current=await apiAction('getStoreV4',[state.code,key]);state.outcome='';renderStore()}catch(err){toast(err.message,'error');show('homeView')}}
+  async function openStore(key){show('storeView');$('storeBody').innerHTML='<div class="card loading">Loading store…</div>';try{state.current=await apiAction('getStoreV4',[state.code,key]);state.outcome='';renderStore();restorePendingForStore()}catch(err){toast(err.message,'error');show('homeView')}}
 
   function renderStore(){
     const r=state.current,s=r.store,p=r.poe||{},req=r.requiredPhotos||[],finalized=!!p.finalized,mats=s.materials||{},items=Object.keys(mats).filter(k=>Number(mats[k]||0)>0),photos=r.photos||{},groups=r.photoGroups||{},uploadedMain=req.filter(x=>photos[x.type]).length;
@@ -82,31 +87,37 @@
 
   function photoRequestForm(type,file,addAnother,uploadToken){const f=new FormData();f.append('accessCode',state.code);f.append('storeKey',state.current.store.key);f.append('photoType',type);f.append('addAnother',addAnother?'1':'0');f.append('uploadToken',uploadToken);f.append('photoFile',file,file.name||'photo.jpg');return f}
   function sendPhoto(form,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',API+'/api/photo',true);xhr.timeout=180000;xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.max(1,Math.min(99,Math.round(e.loaded*100/e.total))))};xhr.onerror=()=>reject(new Error('Network connection lost during photo upload.'));xhr.ontimeout=()=>reject(new Error('Photo transfer timed out. Check signal and retry.'));xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(_){}if(xhr.status>=200&&xhr.status<300&&data.ok!==false)resolve(data.result||data);else reject(new Error(data.error||('Photo upload failed (HTTP '+xhr.status+').')))};xhr.send(form)})}
-  async function confirmPhoto(resume){const r=await fetch(API+'/api/photo/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(resume),cache:'no-store',credentials:'omit'});let data={};try{data=await r.json()}catch(_){};if(!r.ok||data.ok===false)throw new Error(data.error||'POE record sync failed.');return data.result||data}
+  async function confirmPhoto(resume){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),7000);let r;try{r=await fetch(API+'/api/photo/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(resume),cache:'no-store',credentials:'omit',signal:controller.signal})}catch(err){if(err&&err.name==='AbortError')throw new Error('POE sync is still busy.');throw err}finally{clearTimeout(timer)}let data={};try{data=await r.json()}catch(_){};if(!r.ok||data.ok===false)throw new Error(data.error||'POE record sync failed.');return data.result||data}
 
-  function beginMetadataSync(type,r,status,queue,slot,addAnother){
-    state.pendingSync.add(type);updateSubmit();status.textContent='✓ Saved — syncing';queue.textContent='Photo safely saved in Drive. Final POE record is syncing; do not upload it again.';slot.classList.remove('failed','uploading');slot.classList.add('ok');
-    let cancelled=false;
+  function beginMetadataSync(type,r,status,queue,slot,addAnother,restored=false){
+    const rec={code:state.code,storeKey:state.current.store.key,type,addAnother:!!addAnother,resume:r.resume,fileId:r.fileId||'',name:r.name||'',url:r.url||'',savedAt:Date.now()};if(!restored)savePending(rec);
+    state.pendingSync.add(type);updateSubmit();status.textContent='✓ Saved — syncing';queue.textContent='Photo safely saved in Drive. Final POE record is syncing automatically. Do not upload it again.';slot.classList.remove('failed','uploading');slot.classList.add('ok');
+    let running=false;
     const run=async()=>{
-      let lastErr;
-      for(let attempt=0;attempt<8&&!cancelled;attempt++){
-        try{const done=await confirmPhoto(r.resume);if(done?.ok!==false){state.pendingSync.delete(type);updateSubmit();status.textContent='✓ Uploaded';queue.textContent='Saved to POE.';toast('Photo uploaded ✓','success');apiAction('saveStoreV4',[state.code,payload()]).catch(()=>{});return}}
-        catch(err){lastErr=err}
-        await new Promise(ok=>setTimeout(ok,1800+attempt*500));
-      }
-      status.textContent='✓ Saved — sync pending';queue.innerHTML='Photo is safely in Drive but its POE record still needs syncing. <button type="button" class="linkDanger" id="retrySync_'+type+'">Retry record sync</button>. Do not upload the photo again.';
-      const retry=$('retrySync_'+type);if(retry)retry.onclick=()=>{queue.textContent='Retrying POE record sync…';run()};
-      if(lastErr)console.warn('POE metadata sync pending',lastErr);
+      if(running)return;running=true;let lastErr;
+      try{
+        for(let attempt=0;attempt<10;attempt++){
+          try{const done=await confirmPhoto(r.resume);if(done?.ok!==false){removePending(rec);state.pendingSync.delete(type);updateSubmit();status.textContent='✓ Uploaded';queue.textContent='Saved to POE.';toast('Photo uploaded ✓','success');apiAction('saveStoreV4',[state.code,payload()]).catch(()=>{});return}}
+          catch(err){lastErr=err}
+          if(!navigator.onLine){queue.textContent='✓ Photo saved. Waiting for internet to sync POE record…';}
+          await new Promise(ok=>setTimeout(ok,1800+attempt*700));
+        }
+        status.textContent='✓ Saved — sync pending';queue.innerHTML='Photo is safely in Drive. Its POE record will keep retrying when you reopen this store. <button type="button" class="linkDanger" id="retrySync_'+type+'">Retry now</button>. Do not upload the photo again.';
+        const retry=$('retrySync_'+type);if(retry)retry.onclick=()=>{queue.textContent='Retrying POE record sync…';running=false;run()};
+        if(lastErr)console.warn('POE metadata sync pending',lastErr);
+      }finally{running=false}
     };
     run();
   }
+
+  function restorePendingForStore(){if(!state.current?.store?.key)return;const rows=pendingRows().filter(x=>x.code===state.code&&x.storeKey===state.current.store.key&&x.resume);rows.forEach(rec=>{const status=$('status_'+rec.type),queue=$('queue_'+rec.type),slot=$('slot_'+rec.type);if(status&&queue&&slot&&!state.pendingSync.has(rec.type)){beginMetadataSync(rec.type,rec,status,queue,slot,rec.addAnother,true)}})}
 
   async function uploadPhoto(type,file,addAnother){
     if(!file)return;requireApi();if(file.size>12*1024*1024){toast('Photo is over 12 MB. Please retake it normally.','error');return}if(state.uploading.has(type)||state.pendingSync.has(type)){toast('Wait for this photo to finish syncing.','error');return}
     const uploadToken=(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random()),slot=$('slot_'+type),status=$('status_'+type),bar=$('bar_'+type),queue=$('queue_'+type);state.uploading.add(type);updateSubmit();slot.classList.remove('failed');slot.classList.add('uploading');status.textContent=addAnother?'Uploading additional photo…':'Uploading…';queue.textContent='Keep the app open until Drive confirms the photo.';
     const progress=p=>{bar.style.width=p+'%';status.textContent=(addAnother?'Uploading additional photo… ':'Uploading… ')+p+'%'};
     try{
-      let r;try{r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),progress)}catch(first){queue.textContent='Connection interrupted. Retrying the same reserved upload…';await new Promise(ok=>setTimeout(ok,2500));r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),p=>{bar.style.width=p+'%';status.textContent='Retrying… '+p+'%'})}
+      let r;try{r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),progress)}catch(first){queue.textContent='Connection interrupted. Retrying the same upload session…';await new Promise(ok=>setTimeout(ok,2500));r=await sendPhoto(photoRequestForm(type,file,addAnother,uploadToken),p=>{bar.style.width=p+'%';status.textContent='Retrying… '+p+'%'})}
       if(!r?.ok||!r.fileId)throw new Error('Server did not confirm the saved photo.');bar.style.width='100%';slot.classList.remove('uploading');slot.classList.add('ok');
       if(!addAnother){state.current.photos=state.current.photos||{};state.current.photos[type]={type:r.type,url:r.url,name:r.name,fileId:r.fileId}}
       if(r.pendingMetadata&&r.resume){toast('Photo safely saved ✓','success');beginMetadataSync(type,r,status,queue,slot,addAnother)}
@@ -117,6 +128,7 @@
 
   async function removeMain(type){if(!confirm('Remove this main POE photo? The physical Drive file will be preserved.'))return;try{await apiAction('removePhotoV4',[state.code,{storeKey:state.current.store.key,photoType:type}]);toast('Main photo removed from active POE','success');await openStore(state.current.store.key)}catch(err){toast(err.message,'error')}}
 
+  window.addEventListener('online',()=>{if(state.current)restorePendingForStore()});
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
   if(state.code){login(state.code).catch(()=>{sessionStorage.removeItem('smf_code');state.code='';show('loginView')})}else show('loginView');
 })();
