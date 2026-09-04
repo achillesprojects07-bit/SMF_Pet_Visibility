@@ -6,6 +6,7 @@
   const state={token:sessionStorage.getItem('smf_token')||'',user:null,home:null,current:null,photos:{},uploading:new Set(),outcome:''};
 
   $('version').textContent='v'+VERSION;
+
   function show(id){['loginView','homeView','storeView'].forEach(x=>$(x).classList.toggle('hidden',x!==id))}
   function toast(msg){$('toast').textContent=msg;$('toast').classList.remove('hidden');setTimeout(()=>$('toast').classList.add('hidden'),2600)}
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -20,7 +21,7 @@
       opt.body=JSON.stringify(opt.body);
     }
     const r=await fetch(API+path,{...opt,headers});
-    let data={};try{data=await r.json()}catch(_){ }
+    let data={}; try{data=await r.json()}catch(_){ }
     if(!r.ok)throw new Error(data.error||('Request failed ('+r.status+')'));
     return data;
   }
@@ -111,20 +112,30 @@
     document.querySelectorAll('.inventoryRow').forEach(row=>{const k=row.dataset.item,b=Number(row.querySelector('.beg').value||0),i=Number(row.querySelector('.ins').value||0);beginning[k]=b;installed[k]=i;remaining[k]=b-i});
     return {storeKey:state.current.store.key,beginning,installed,takeHome:remaining,notes:$('notes')?.value||''};
   }
-  function updateSubmit(){const pending=state.uploading.size>0;$('submitVisit').disabled=!state.outcome||pending}
+  function updateSubmit(){
+    const pending=state.uploading.size>0;
+    $('submitVisit').disabled=!state.outcome||pending;
+  }
   async function saveDraft(){try{await api('/v1/field/store/save',{method:'POST',body:collect()});toast('Draft saved ✓')}catch(err){toast(err.message)}}
   async function submitVisit(){
     if(!state.outcome)return;
     if(state.uploading.size)return toast('Wait for all photo uploads to finish.');
-    try{const body=collect();body.status=state.outcome;await api('/v1/field/store/submit',{method:'POST',body});toast('Store visit submitted ✓');await openStore(state.current.store.key)}catch(err){toast(err.message)}
+    try{
+      const body=collect();body.status=state.outcome;
+      await api('/v1/field/store/submit',{method:'POST',body});
+      toast('Store visit submitted ✓');await openStore(state.current.store.key);
+    }catch(err){toast(err.message)}
   }
 
   function uploadWithProgress(url,form,token,onProgress){
     return new Promise((resolve,reject)=>{
-      const xhr=new XMLHttpRequest();xhr.open('POST',url,true);xhr.setRequestHeader('Authorization','Bearer '+token);
+      const xhr=new XMLHttpRequest();
+      xhr.open('POST',url,true);
+      xhr.setRequestHeader('Authorization','Bearer '+token);
       xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded*100/e.total))};
       xhr.onerror=()=>reject(new Error('Network connection lost during upload.'));
-      xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(_){ }if(xhr.status>=200&&xhr.status<300)resolve(data);else reject(new Error(data.error||('Upload failed ('+xhr.status+')')))};
+      xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(_){ }
+        if(xhr.status>=200&&xhr.status<300)resolve(data);else reject(new Error(data.error||('Upload failed ('+xhr.status+')')))};
       xhr.send(form);
     });
   }
@@ -140,12 +151,24 @@
     try{
       requireApi();
       let r;
-      try{r=await uploadWithProgress(API+'/v1/field/photo',form,state.token,p=>{bar.style.width=p+'%';status.textContent='Uploading… '+p+'%'})}
-      catch(firstErr){queue.textContent='Connection interrupted. Retrying once with the same upload ID…';await new Promise(resolve=>setTimeout(resolve,1200));r=await uploadWithProgress(API+'/v1/field/photo',form,state.token,p=>{bar.style.width=p+'%';status.textContent='Retrying… '+p+'%'})}
+      try{
+        r=await uploadWithProgress(API+'/v1/field/photo',form,state.token,p=>{bar.style.width=p+'%';status.textContent='Uploading… '+p+'%'});
+      }catch(firstErr){
+        queue.textContent='Connection interrupted. Retrying once with the same upload ID…';
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        r=await uploadWithProgress(API+'/v1/field/photo',form,state.token,p=>{bar.style.width=p+'%';status.textContent='Retrying… '+p+'%'});
+      }
       if(!r.ok)throw new Error('Server did not confirm the photo.');
-      state.photos[type]=r.photo;slot.className='photoSlot ok';status.textContent='✓ Uploaded';bar.style.width='100%';queue.textContent='Saved to POE.';toast('Photo uploaded ✓');
-    }catch(err){slot.className='photoSlot failed';status.textContent='✕ NOT uploaded';queue.textContent=err.message+' Choose the photo again to retry.';toast('Photo not uploaded')}
-    finally{state.uploading.delete(type);updateSubmit()}
+      if(!addAnother)state.photos[type]=r.photo;
+      const mainExists=!!state.photos[type];
+      slot.className='photoSlot '+(mainExists?'ok':'');
+      status.textContent=mainExists?'✓ Main photo uploaded':'Required — main photo still needed';
+      bar.style.width='100%';
+      queue.textContent=addAnother?'Additional evidence photo saved to POE.':'Saved to POE.';
+      toast('Photo uploaded ✓');
+    }catch(err){
+      slot.className='photoSlot failed';status.textContent='✕ NOT uploaded';queue.textContent=err.message+' Choose the photo again to retry.';toast('Photo not uploaded');
+    }finally{state.uploading.delete(type);updateSubmit()}
   }
 
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
