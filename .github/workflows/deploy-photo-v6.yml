@@ -38,6 +38,30 @@ jobs:
             fi
           done
 
+      - name: Verify Google OAuth refresh token
+        shell: bash
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          FILE=$(mktemp)
+          CODE=$(curl -sS -o "$FILE" -w '%{http_code}' \
+            -X POST https://oauth2.googleapis.com/token \
+            --data-urlencode "client_id=${GOOGLE_OAUTH_CLIENT_ID}" \
+            --data-urlencode "client_secret=${GOOGLE_OAUTH_CLIENT_SECRET}" \
+            --data-urlencode "refresh_token=${GOOGLE_OAUTH_REFRESH_TOKEN}" \
+            --data-urlencode "grant_type=refresh_token" || true)
+          BODY=$(cat "$FILE")
+          rm -f "$FILE"
+          if [ "$CODE" != "200" ] || ! echo "$BODY" | jq -e '.access_token and (.access_token|length>0)' >/dev/null 2>&1; then
+            echo "Google OAuth refresh failed (HTTP $CODE)."
+            echo "$BODY" | jq -c '{error,error_description}'
+            exit 1
+          fi
+          echo "Google OAuth refresh verified."
+
       - name: Install Wrangler
         run: npm install --global wrangler@4
 
