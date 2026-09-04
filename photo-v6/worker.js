@@ -81,19 +81,37 @@ async function findFolderFlexible(env,parentId,candidates){
   for(const k of kids){ const nk=normFolderName(k.name); if(norms.includes(nk))return k; }
   return null;
 }
+function matchStoreFolder(k,storeName,storeId){
+  const nk=normFolderName(k.name), nn=normFolderName(storeName), ni=normFolderName(storeId);
+  if(ni&&nk===ni)return true;
+  if(nn&&nk===nn)return true;
+  if(ni&&nn&&nk.includes(ni)&&nk.includes(nn))return true;
+  if(nn&&(nk.endsWith(nn)||nk.includes(nn)))return true;
+  return false;
+}
+async function findStoreInArea(env,areaId,storeName,storeId){
+  const candidates=[]; if(storeId)candidates.push(storeId+' - '+storeName); candidates.push(storeName); if(storeId)candidates.push(storeId);
+  let f=await findFolderFlexible(env,areaId,candidates); if(f)return f;
+  const kids=await listChildFolders(env,areaId); return kids.find(k=>matchStoreFolder(k,storeName,storeId))||null;
+}
 async function resolveStoreFolder(env,store){
   let parent=String(env.POE_ROOT_FOLDER_ID||''); if(!parent)throw new Error('POE root folder is not configured.');
-  const fixed=[String(env.SMF_MODE||'LIVE'),safeName(store.team),safeName(store.area)];
-  for(const n of fixed){ const f=await findFolderFlexible(env,parent,[n]); if(!f)throw new Error('Existing POE folder not found: '+n+'. Upload was not started.'); parent=f.id; }
+  const live=await findFolderFlexible(env,parent,[String(env.SMF_MODE||'LIVE')]); if(!live)throw new Error('Existing POE folder not found: LIVE. Upload was not started.');
+  const team=await findFolderFlexible(env,live.id,[safeName(store.team)]); if(!team)throw new Error('Existing POE folder not found for assigned team. Upload was not started.');
   const storeName=safeName(store.name), storeId=safeName(store.storeId);
-  const candidates=[]; if(storeId)candidates.push(storeId+' - '+storeName); candidates.push(storeName);
-  let f=await findFolderFlexible(env,parent,candidates);
-  if(!f){
-    const kids=await listChildFolders(env,parent), nn=normFolderName(storeName), ni=normFolderName(storeId);
-    f=kids.find(k=>{ const nk=normFolderName(k.name); return (ni&&nk.includes(ni)&&nk.includes(nn)) || (nn&&nk.endsWith(nn)); })||null;
+
+  // Prefer the area supplied by the field data, but never fail only because an area label differs from Drive.
+  const preferredArea=await findFolderFlexible(env,team.id,[safeName(store.area)]);
+  if(preferredArea){ const preferred=await findStoreInArea(env,preferredArea.id,storeName,storeId); if(preferred)return preferred.id; }
+
+  // Global team-wide fallback: search every existing area folder for this assigned store.
+  // This handles area naming differences such as "Binangonan, Rizal" vs an existing broader Drive area folder.
+  const areas=await listChildFolders(env,team.id);
+  for(const area of areas){
+    if(preferredArea&&area.id===preferredArea.id)continue;
+    const f=await findStoreInArea(env,area.id,storeName,storeId); if(f)return f.id;
   }
-  if(!f)throw new Error('Existing POE folder not found for '+storeName+'. Upload was not started.');
-  return f.id;
+  throw new Error('Existing POE folder not found for '+storeName+'. Upload was not started.');
 }
 async function createDriveShell(env,folderId,fileName,mime,uploadId){ const r=await gfetch(env,'https://www.googleapis.com/drive/v3/files?fields=id,name,size,mimeType,webViewLink,parents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fileName,mimeType:mime||'image/jpeg',parents:[folderId],appProperties:{smfUploadId:uploadId,smfTransport:'V6_DIRECT_OAUTH'}})}); const d=await r.json(); if(!r.ok||!d.id)throw new Error('Drive could not reserve the photo file.'); return d; }
 async function uploadDrive(env,fileId,body,mime){ const r=await gfetch(env,`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,size,mimeType,webViewLink,parents`,{method:'PATCH',headers:{'Content-Type':mime||'application/octet-stream'},body}); const d=await r.json(); if(!r.ok||!d.id||Number(d.size||0)<=0)throw new Error('Drive did not confirm the photo bytes.'); return d; }
@@ -121,7 +139,7 @@ async function readiness(env){
   const rootId=String(env.POE_ROOT_FOLDER_ID||''); if(!rootId)throw new Error('POE root folder is not configured.');
   const rr=await gfetch(env,`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(rootId)}?fields=id,name,mimeType,trashed`); const rd=await rr.json(); if(!rr.ok||rd.trashed||rd.mimeType!=='application/vnd.google-apps.folder')throw new Error('POE root folder is not available to the Google OAuth account.');
   const rows=await sheetValues(env,'V4_PHOTOS!1:1'); if(!rows.length)throw new Error('V4_PHOTOS header row is unavailable.'); const headers=rows[0].map(String); const required=['Environment','Store Key','Store Name','Team','Photo Type','File ID','File Name','File URL','Folder ID','Active','Uploaded At','Uploaded By','Guide Used','Notes']; const missing=required.filter(h=>!headers.includes(h)); if(missing.length)throw new Error('V4_PHOTOS is missing columns: '+missing.join(', '));
-  return {ok:true,service:'SMF_PHOTO_V6',version:'6.0.3-folder-compatible',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false,driveRoot:{id:rd.id,name:rd.name},sheet:'V4_PHOTOS',requiredColumnsOk:true,folderPattern:'LIVE / Team / Area / (Store ID - Store Name OR Store Name)',createsFolders:false};
+  return {ok:true,service:'SMF_PHOTO_V6',version:'6.0.4-teamwide-store-resolver',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false,driveRoot:{id:rd.id,name:rd.name},sheet:'V4_PHOTOS',requiredColumnsOk:true,folderPattern:'LIVE / Team / Area / (Store ID - Store Name OR Store Name)',createsFolders:false};
 }
 
 export default { async fetch(request,env){
@@ -129,7 +147,7 @@ export default { async fetch(request,env){
   try{
     if(!env.DB)throw new Error('Photo transaction database is not configured.');
     const url=new URL(request.url), path=url.pathname;
-    if(path==='/v6/health'&&request.method==='GET')return json(request,env,{ok:true,service:'SMF_PHOTO_V6',version:'6.0.3-folder-compatible',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false});
+    if(path==='/v6/health'&&request.method==='GET')return json(request,env,{ok:true,service:'SMF_PHOTO_V6',version:'6.0.4-teamwide-store-resolver',directGoogle:true,googleAuth:'oauth-refresh-token',appsScriptPhotoPath:false});
     if(path==='/v6/ready'&&request.method==='GET')return json(request,env,await readiness(env));
     if(path==='/v6/session'&&request.method==='POST')return json(request,env,await createSession(request,env));
     if(path==='/v6/photo/preflight'&&request.method==='POST')return json(request,env,await preflight(request,env));
