@@ -26,6 +26,7 @@ function doPost(e){
   try{
     const body=JSON.parse(String(e&&e.postData&&e.postData.contents||'{}'));apiV5RequireBridgeSecret_(body.bridgeSecret);
     const action=String(body.action||''),args=Array.isArray(body.args)?body.args:[];
+    if(action==='prepareExternalPhotoUploadV5')return apiV5Json_({ok:true,result:prepareExternalPhotoUploadV5.apply(null,args)});
     if(action==='prepareExternalPhotoV5')return apiV5Json_({ok:true,result:prepareExternalPhotoV5.apply(null,args)});
     if(action==='commitExternalPhotoV5')return apiV5Json_({ok:true,result:commitExternalPhotoV5.apply(null,args)});
     if(action==='commitExternalPhotoFastV5')return apiV5Json_({ok:true,result:commitExternalPhotoFastV5.apply(null,args)});
@@ -35,7 +36,7 @@ function doPost(e){
     return apiV5Json_({ok:true,result:fn.apply(null,args)});
   }catch(err){return apiV5Json_({ok:false,error:String(err&&err.message?err.message:err)});}
 }
-function getBridgeHealthV5(){return {ok:true,bridge:'SMF_API_V5',version:'5.0.1',build:'5.0.5-drive-first',mode:mode_(),timestamp:now_(),stores:storeRows_().length,photosSheet:!!ss_().getSheetByName(V4.PHOTOS)};}
+function getBridgeHealthV5(){return {ok:true,bridge:'SMF_API_V5',version:'5.0.1',build:'5.0.8-two-stage-preflight',mode:mode_(),timestamp:now_(),stores:storeRows_().length,photosSheet:!!ss_().getSheetByName(V4.PHOTOS)};}
 function getDriveUploadTokenV5(){return {accessToken:ScriptApp.getOAuthToken(),issuedAt:now_()};}
 function externalPhotoExtV5_(name,mime){name=String(name||'');mime=String(mime||'').toLowerCase();const m=name.match(/\.([A-Za-z0-9]{2,5})$/);if(m)return m[1].toLowerCase();if(mime.indexOf('png')>=0)return 'png';if(mime.indexOf('webp')>=0)return 'webp';if(mime.indexOf('heic')>=0)return 'heic';if(mime.indexOf('heif')>=0)return 'heif';return 'jpg';}
 function externalPhotoFolderV5_(s){let storeFolder=existingStorePhotoFolder_(s.key);if(storeFolder)return storeFolder;const root=DriveApp.getFolderById(cfg_('POE_ROOT_FOLDER_ID')||V4.ROOT_FOLDER_ID),envFolder=folder_(root,mode_()),teamFolder=folder_(envFolder,s.team),areaFolder=folder_(teamFolder,safe_(s.area));return folder_(areaFolder,s.storeId?s.storeId+' - '+safe_(s.name):safe_(s.name));}
@@ -49,6 +50,23 @@ function apiV5StoreFolderFast_(s,info){const cache=CacheService.getScriptCache()
   const f=externalPhotoFolderV5_(s);cache.put(key,f.getId(),21600);return f;}
 function apiV5DeactivateOldMainFast_(s,baseType,newFileId,u,info){info=info||apiV5PhotoSheet_();if(info.lastRow<2)return true;const hits=info.sh.getRange(2,info.map['Store Key'],info.lastRow-1,1).createTextFinder(String(s.key)).matchEntireCell(true).findAll();hits.forEach(hit=>{const row=hit.getRow();const env=String(info.sh.getRange(row,info.map.Environment).getValue()||'').toUpperCase(),type=String(info.sh.getRange(row,info.map['Photo Type']).getValue()||''),active=info.sh.getRange(row,info.map.Active).getValue(),fid=String(info.sh.getRange(row,info.map['File ID']).getValue()||'');if(env===mode_()&&type===baseType&&truth_(active)&&fid!==String(newFileId||'')){info.sh.getRange(row,info.map.Active).setValue(false);info.sh.getRange(row,info.map.Notes).setValue('Replaced by '+u.name+' at '+now_());}});return true;}
 function externalPhotoDeactivateOldMainV5_(s,baseType,newFileId,u){return apiV5DeactivateOldMainFast_(s,baseType,newFileId,u,apiV5PhotoSheet_());}
+
+/*
+ * Lightweight preflight used before the browser sends photo bytes.
+ * This deliberately avoids poeMap_(), photoRequirements_() and upload-token
+ * scans. Those integrity checks remain in commitExternalPhotoFastV5().
+ * The Worker receives the Drive OAuth token only server-to-server and seals it
+ * before returning an opaque preflight ticket to the browser.
+ */
+function prepareExternalPhotoUploadV5(code,p){
+  const u=auth_(code,['FIELD']);p=payload_(p);const s=store_(p.storeKey);if(s.team!==u.team)throw new Error('Store is not assigned to your team.');
+  const baseType=String(p.photoType||'').toUpperCase().trim();if(!baseType)throw new Error('Photo type is missing.');
+  const isExtra=truth_(p.addAnother),uploadToken=String(p.uploadToken||'').trim();if(!uploadToken)throw new Error('Upload session is missing. Refresh or reopen the app and try again.');
+  const size=Number(p.size||0);if(size<=0)throw new Error('The selected photo is empty.');if(size>12*1024*1024)throw new Error('This photo is unusually large (over 12 MB). Please retake it using the normal phone camera.');
+  const mime=String(p.mime||'').toLowerCase();if(mime&&mime.indexOf('image/')!==0&&mime!=='application/octet-stream')throw new Error('The selected file is not a supported image.');
+  const info=apiV5PhotoSheet_(),folder=apiV5StoreFolderFast_(s,info),suffix=uploadTokenSuffix_(uploadToken),type=isExtra?'EXTRA__'+baseType+'__'+suffix.slice(0,8):baseType,ext=externalPhotoExtV5_(p.originalName,mime),fileName=safe_(s.name)+'_'+type+'_'+suffix+'.'+ext;
+  return {ok:true,storeKey:s.key,storeName:s.name,team:s.team,guide:s.guide,uploadedBy:u.name,baseType:baseType,type:type,isExtra:isExtra,uploadToken:uploadToken,folderId:folder.getId(),fileName:fileName,fileId:'',mime:mime||'image/jpeg',size:size,maxBytes:12*1024*1024,accessToken:ScriptApp.getOAuthToken(),issuedAt:now_()};
+}
 
 function prepareExternalPhotoV5(code,p){
   const u=auth_(code,['FIELD']);p=payload_(p);const s=store_(p.storeKey);if(s.team!==u.team)throw new Error('Store is not assigned to your team.');
