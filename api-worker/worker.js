@@ -1,13 +1,16 @@
 let cachedGoogleToken = null;
 
+// v5 pilot is deliberately FIELD-only. Admin, Client, Safe Store Sync and
+// destructive/demo utilities remain available only through the existing v4.8.2 app.
 const ACTION_ALLOWLIST = new Set([
-  'applySafeStoreSyncV4','createOrResetClientAccessV4','createUserV4','deleteUserV4',
-  'getAdminDashboardV4','getAdminIssuesV4','getAdminStoreV4','getClientDashboardV4',
-  'getClientStoreV4','getFieldHomeV4','getPoeIndexV4','getStoreV4','getSystemV4',
-  'getUsersV4','healthV4','loginV4','photoUploadHealthV4','previewStoreSyncV4',
-  'removePhotoV4','reopenStoreVisitV4','rescheduleStoreV4','resetDemoV4',
-  'resetUserCodeV4','saveStoreV4','setModeV4','setStoreGuideV4','setUserActiveV4',
-  'setUserTeamV4','submitDayV4','submitStoreVisitV4'
+  'loginV4',
+  'getFieldHomeV4',
+  'getStoreV4',
+  'saveStoreV4',
+  'submitStoreVisitV4',
+  'submitDayV4',
+  'removePhotoV4',
+  'rescheduleStoreV4'
 ]);
 
 function corsHeaders(request, env) {
@@ -63,6 +66,7 @@ async function getGoogleAccessToken(env, forceFresh = false) {
   const r = await callAppsScript(env, 'getDriveUploadTokenV5', []);
   const token = String(r && r.accessToken || '');
   if (!token) throw new Error('Apps Script did not provide a Google Drive upload token.');
+  // Cache conservatively; retry once with a fresh token on Drive 401.
   cachedGoogleToken = { token, expiresAt: now + 35 * 60 * 1000 };
   return token;
 }
@@ -120,6 +124,7 @@ async function uploadDriveMedia(env, fileId, file, mime) {
 }
 
 async function ensureDrivePhoto(env, prep, file) {
+  // Deterministic filename lets a retry reuse a file already created by Drive.
   let existing = await findDriveFile(env, prep.folderId, prep.fileName);
   if (!existing) existing = await createDriveShell(env, prep.folderId, prep.fileName, prep.mime || file.type);
   const currentSize = Number(existing.size || 0);
@@ -132,7 +137,7 @@ async function ensureDrivePhoto(env, prep, file) {
 async function handleAction(request, env) {
   const body = await request.json();
   const action = String(body.action || '');
-  if (!ACTION_ALLOWLIST.has(action)) throw new Error('API action is not allowed.');
+  if (!ACTION_ALLOWLIST.has(action)) throw new Error('API action is not allowed in the v5 field pilot.');
   const args = Array.isArray(body.args) ? body.args : [];
   return await callAppsScript(env, action, args);
 }
@@ -155,11 +160,14 @@ async function handlePhoto(request, env) {
     size: Number(file.size || 0)
   };
 
+  // Apps Script validates user/team/store/type and authorizes the exact folder/name.
   const prep = await callAppsScript(env, 'prepareExternalPhotoV5', [code, p]);
   if (prep && prep.alreadyCommitted) return prep;
 
+  // Photo bytes bypass Apps Script HTML Service and go directly to Drive.
   const drive = await ensureDrivePhoto(env, prep, file);
 
+  // Apps Script re-validates everything before V4_PHOTOS is changed.
   const commitPayload = {
     ...p,
     folderId: prep.folderId,
