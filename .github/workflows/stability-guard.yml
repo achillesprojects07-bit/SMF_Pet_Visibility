@@ -26,6 +26,7 @@ jobs:
             admin.html admin.css admin.js
             client.html client.css client.js
             backend/ApiV5.gs api-worker/worker.js
+            photo-v6/worker.js photo-v6/migrations/0001_photo_v6.sql photo-v6/wrangler.toml
             DATA_PRESERVATION.md AUDIT.md
           )
           for f in "${required[@]}"; do
@@ -43,18 +44,33 @@ jobs:
           node --check admin.js
           node --check client.js
           node --check api-worker/worker.js
+          node --check photo-v6/worker.js
 
-      - name: Verify photo-upload safety invariants
+      - name: Verify V6 photo-upload safety invariants
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "uploadToken" app.js
+          grep -q "PHOTO_API_BASE_URL" config.js
+          grep -q "smf_pending_photo_v6" app.js
+          grep -q "uploadId" app.js
           grep -q "xhr.timeout" app.js
           grep -q "pendingSync" app.js
-          grep -q "photo/confirm" app.js
+          grep -q "/v6/photo/preflight" app.js
+          grep -q "/sync" app.js
+          grep -q "recoverAfterUploadInterruption" app.js
           grep -q "photoSlot.uploading" stability.js
-          grep -qi "saved.*sync" stability.js
           grep -q "beforeunload" stability.js
+          grep -q "METADATA_PENDING" photo-v6/worker.js
+          grep -q "V6_UPLOAD:" photo-v6/worker.js
+          grep -q "createsFolders:false" photo-v6/worker.js
+          grep -q "Existing POE folder not found" photo-v6/worker.js
+          grep -q "LIVE / Team / Area / Store Name" photo-v6/worker.js
+          grep -q "appsScriptPhotoPath:false" photo-v6/worker.js
+
+      - name: Verify legacy recovery path remains intact
+        shell: bash
+        run: |
+          set -euo pipefail
           grep -q "prepareExternalPhotoV5" backend/ApiV5.gs
           grep -q "commitExternalPhotoFastV5" backend/ApiV5.gs
           grep -q "alreadyCommitted" backend/ApiV5.gs
@@ -73,13 +89,15 @@ jobs:
           grep -q 'field-day-filter.js' sw.js
           grep -q 'stability.js' sw.js
           grep -q 'field-day-filter.js' .github/workflows/deploy-pages.yml
+          grep -q 'config.js' .github/workflows/deploy-pages.yml
+          grep -q 'app.js' .github/workflows/deploy-pages.yml
 
-      - name: Block destructive Drive operations in v5 code
+      - name: Block destructive Drive operations in all photo code
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RniE "setTrashed\(true\)|Drive\.Files\.(remove|delete)|files\.delete|\.removeFile\(" backend/ApiV5.gs api-worker/worker.js; then
-            echo "ERROR: destructive Google Drive operation detected in v5 upload path."
+          if grep -RniE "setTrashed\(true\)|Drive\.Files\.(remove|delete)|files\.delete|\.removeFile\(" backend/ApiV5.gs api-worker/worker.js photo-v6/worker.js; then
+            echo "ERROR: destructive Google Drive operation detected in photo path."
             exit 1
           fi
 
