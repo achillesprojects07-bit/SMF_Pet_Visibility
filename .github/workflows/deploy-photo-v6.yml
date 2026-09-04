@@ -132,3 +132,23 @@ jobs:
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           SCRIPT_API_URL: ${{ secrets.SCRIPT_API_URL }}
           BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+
+      - name: Verify live V6 health and Google readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://smf-pet-visibility-photo-v6.achilles-projects07.workers.dev"
+          for i in 1 2 3 4 5; do
+            HEALTH=$(curl -fsS "$BASE/v6/health" || true)
+            if [ "$(echo "$HEALTH" | jq -r '.ok // false')" = "true" ] && [ "$(echo "$HEALTH" | jq -r '.appsScriptPhotoPath // true')" = "false" ]; then
+              break
+            fi
+            if [ "$i" = "5" ]; then
+              echo "V6 health check failed: $HEALTH"
+              exit 1
+            fi
+            sleep 2
+          done
+          READY=$(curl -fsS "$BASE/v6/ready")
+          echo "$READY" | jq -e '.ok == true and .directGoogle == true and .requiredColumnsOk == true and .createsFolders == false and .folderPattern == "LIVE / Team / Area / Store Name"' >/dev/null
+          echo "V6 live readiness verified."
