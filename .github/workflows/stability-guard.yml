@@ -1,0 +1,73 @@
+name: SMF Stability Guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify protected runtime files exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            index.html auth.js field.html app.js styles.css brand.css config.js sw.js
+            admin.html admin.css admin.js
+            client.html client.css client.js
+            backend/ApiV5.gs api-worker/worker.js
+            DATA_PRESERVATION.md AUDIT.md
+          )
+          for f in "${required[@]}"; do
+            test -f "$f" || { echo "ERROR: protected file missing: $f"; exit 1; }
+          done
+
+      - name: JavaScript syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check auth.js
+          node --check app.js
+          node --check admin.js
+          node --check client.js
+          node --check api-worker/worker.js
+
+      - name: Verify photo-upload safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "uploadToken" app.js
+          grep -q "xhr.timeout" app.js
+          grep -q "prepareExternalPhotoV5" backend/ApiV5.gs
+          grep -q "commitExternalPhotoV5" backend/ApiV5.gs
+          grep -q "alreadyCommitted" backend/ApiV5.gs
+          grep -q "tryLock" backend/ApiV5.gs
+          grep -q "getSize()||0)<=0" backend/ApiV5.gs
+
+      - name: Block destructive Drive operations in v5 code
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RniE "setTrashed\(true\)|Drive\.Files\.(remove|delete)|files\.delete|\.removeFile\(" backend/ApiV5.gs api-worker/worker.js; then
+            echo "ERROR: destructive Google Drive operation detected in v5 upload path."
+            exit 1
+          fi
+
+      - name: Verify preservation contract remains explicit
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "Existing V4_POE rows" DATA_PRESERVATION.md
+          grep -q "Existing V4_PHOTOS rows" DATA_PRESERVATION.md
+          grep -q "Existing physical POE files" DATA_PRESERVATION.md
+          grep -q "No physical Drive file is deleted" DATA_PRESERVATION.md
