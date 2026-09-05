@@ -1,4 +1,4 @@
-const CACHE='smf-v6-shell-3';
+const CACHE='smf-v6-shell-4';
 const SHELL=['./','./index.html','./auth.js','./field.html','./styles.css','./brand.css','./app.js','./photo-extra-guard.js','./field-day-filter.js','./stability.js','./config.js','./manifest.webmanifest','./admin.html','./admin.css','./admin.js','./client.html','./client.css','./client.js'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
