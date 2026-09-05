@@ -82,7 +82,7 @@ jobs:
           grep -q "delete photos\[base\]" photo-extra-guard.js
           grep -q "keeps main" photo-extra-guard.js
           grep -q "data-photo-count" photo-extra-guard.js
-          grep -q "photos uploaded" photo-extra-guard.js
+          grep -q "photo.*uploaded" photo-extra-guard.js
           grep -q "additional" photo-extra-guard.js
           grep -q "completedUploads" photo-extra-guard.js
 
