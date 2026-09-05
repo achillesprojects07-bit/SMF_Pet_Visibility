@@ -28,7 +28,10 @@
   function setCount(baseType, mainCount, extraCount){
     const base = norm(baseType);
     if(!base) return;
-    shotCounts.set(base,{main:Number(mainCount||0),extras:Number(extraCount||0)});
+    const next={main:Number(mainCount||0),extras:Number(extraCount||0)};
+    const prev=shotCounts.get(base);
+    if(prev && prev.main===next.main && prev.extras===next.extras){ paintCount(base); return; }
+    shotCounts.set(base,next);
     paintCount(base);
   }
 
@@ -48,8 +51,10 @@
       if(title && title.nextSibling) slot.insertBefore(el,title.nextSibling); else slot.appendChild(el);
     }
     const total = c.main + c.extras;
-    el.textContent = total + ' photo' + (total===1?'':'s') + ' uploaded' + (total ? ' — ' + c.main + ' main' + (c.extras ? ' + ' + c.extras + ' additional' : '') : '');
-    el.dataset.total=String(total);
+    const text = total + ' photo' + (total===1?'':'s') + ' uploaded' + (total ? ' — ' + c.main + ' main' + (c.extras ? ' + ' + c.extras + ' additional' : '') : '');
+    if(el.textContent !== text) el.textContent = text;
+    const totalText=String(total);
+    if(el.dataset.total !== totalText) el.dataset.total=totalText;
   }
 
   function paintAll(){ shotCounts.forEach((_,base)=>paintCount(base)); }
@@ -124,15 +129,21 @@
     return response;
   };
 
+  let observerScheduled=false;
   const observer = new MutationObserver(() => {
-    document.querySelectorAll('label.secondaryPhoto').forEach(label => {
-      const input = label.querySelector('input[type="file"]');
-      if (!input) return;
-      const textNode = [...label.childNodes].find(n => n.nodeType === Node.TEXT_NODE);
-      if (textNode && textNode.nodeValue?.trim() !== '+ Add Additional Photo — keeps main') textNode.nodeValue = '+ Add Additional Photo — keeps main';
-      label.title = 'Adds another photo to this shot list item. It does not replace the required main photo.';
+    if(observerScheduled) return;
+    observerScheduled=true;
+    requestAnimationFrame(()=>{
+      observerScheduled=false;
+      document.querySelectorAll('label.secondaryPhoto').forEach(label => {
+        const input = label.querySelector('input[type="file"]');
+        if (!input) return;
+        const textNode = [...label.childNodes].find(n => n.nodeType === Node.TEXT_NODE);
+        if (textNode && textNode.nodeValue?.trim() !== '+ Add Additional Photo — keeps main') textNode.nodeValue = '+ Add Additional Photo — keeps main';
+        if(label.title !== 'Adds another photo to this shot list item. It does not replace the required main photo.') label.title = 'Adds another photo to this shot list item. It does not replace the required main photo.';
+      });
+      paintAll();
     });
-    paintAll();
   });
 
   if (document.documentElement) observer.observe(document.documentElement, { childList: true, subtree: true });
