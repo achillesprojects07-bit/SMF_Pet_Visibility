@@ -68,13 +68,13 @@ jobs:
           grep -q "xhr.timeout=120000" app.js
           grep -q "photoSlot.uploading" stability.js
           grep -q "beforeunload" stability.js
-          grep -q "smf-v6-shell-4" sw.js
+          grep -q "smf-v6-shell-5" sw.js
 
       - name: Verify additional photos remain separate and visible counts are shown
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "photo-extra-guard.js" field.html
+          grep -q "photo-extra-guard.js?v=6.0.4" field.html
           grep -q "photo-extra-guard.js" sw.js
           grep -q "EXTRA_PREFIX = 'EXTRA__'" photo-extra-guard.js
           grep -q "body?.action === 'getStoreV4'" photo-extra-guard.js
@@ -85,6 +85,8 @@ jobs:
           grep -q "photo.*uploaded" photo-extra-guard.js
           grep -q "additional" photo-extra-guard.js
           grep -q "completedUploads" photo-extra-guard.js
+          grep -q "if(el.textContent !== text)" photo-extra-guard.js
+          grep -q "observerScheduled" photo-extra-guard.js
 
       - name: Verify V6 backend safety invariants
         shell: bash
