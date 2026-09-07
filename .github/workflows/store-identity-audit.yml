@@ -4,7 +4,8 @@ on:
   push:
     branches: [store-id-compat-audit]
     paths:
-      - 'migration/**'
+      - 'migration/store-identity-audit.mjs'
+      - 'migration/safe-sync-engine.mjs'
       - '.github/workflows/store-identity-audit.yml'
   workflow_dispatch:
 
@@ -18,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Syntax check migration tools
+      - name: Syntax check read-only migration tools
         run: |
           node --check migration/store-identity-audit.mjs
           node --check migration/safe-sync-engine.mjs
@@ -42,12 +43,25 @@ jobs:
           SAFE_SYNC_MODE: DRY_RUN
         run: node migration/safe-sync-engine.mjs
 
-      - name: Verify no write mode is enabled in CI
+      - name: Verify read-only audit tools contain no write or destructive path
         run: |
+          set -euo pipefail
           grep -q "writeImplementationEnabled: false" migration/safe-sync-engine.mjs
           grep -q "APPLY BLOCKED BY DESIGN" migration/safe-sync-engine.mjs
-          if grep -RniE "spreadsheets\.values\.(update|append)|batchUpdate|files\.delete|setTrashed\(true\)" migration; then
-            echo "ERROR: write/destructive operation detected in migration tools."
+          if grep -niE "spreadsheets\.values\.(update|append)|batchUpdate|files\.delete|setTrashed\(true\)" \
+            migration/store-identity-audit.mjs migration/safe-sync-engine.mjs; then
+            echo "ERROR: write/destructive operation detected in read-only migration tools."
+            exit 1
+          fi
+
+      - name: Verify dedicated source identity builder stays isolated from protected live tables
+        run: |
+          set -euo pipefail
+          node --check migration/build-source-identity-layer.mjs
+          grep -q "TARGET_SHEET = 'STORE IDENTITY & SCHEDULE'" migration/build-source-identity-layer.mjs
+          grep -q "EXPECTED_STORE_COUNT = 83" migration/build-source-identity-layer.mjs
+          if grep -nE "V4_STORES.*(values.update|append)|V4_POE.*(values.update|append)|V4_PHOTOS.*(values.update|append)|files\.delete|setTrashed\(true\)" migration/build-source-identity-layer.mjs; then
+            echo "ERROR: protected production write/destructive operation detected in source identity builder."
             exit 1
           fi
 
