@@ -1,0 +1,53 @@
+name: SMF Store Change History
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/store-change-history.mjs'
+      - '.github/workflows/store-change-history.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/store-change-history.mjs
+
+      - name: Append Store Identity change history
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/store-change-history.mjs
+
+      - name: Re-run history to prove idempotency
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: |
+          set -euo pipefail
+          out="$(node migration/store-change-history.mjs)"
+          echo "$out"
+          node -e 'const x=JSON.parse(process.argv[1]); if(x.rowsAppendedThisRun!==0) { console.error(`Expected idempotent second run, appended ${x.rowsAppendedThisRun}`); process.exit(1); } if(x.deletes!==0) process.exit(1);' "$out"
+
+      - name: Verify change-history safety boundaries
+        run: |
+          set -euo pipefail
+          grep -q "HISTORY_SHEET = 'STORE CHANGE HISTORY'" migration/store-change-history.mjs
+          grep -q "historyPolicy:'APPEND_ONLY'" migration/store-change-history.mjs
+          grep -q "EXPECTED_BASELINE_COUNT = 83" migration/store-change-history.mjs
+          if grep -nE "V4_STORES|V4_POE|V4_PHOTOS|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google|workers\.dev|script\.google" migration/store-change-history.mjs; then
+            echo "ERROR: protected production/runtime reference detected in change-history writer."
+            exit 1
+          fi
