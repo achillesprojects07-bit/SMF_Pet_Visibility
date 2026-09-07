@@ -5,6 +5,7 @@ on:
     branches: [store-id-compat-audit]
     paths:
       - 'migration/build-source-identity-layer.mjs'
+      - 'migration/test-management-edit-preservation.mjs'
       - '.github/workflows/build-source-identity-layer.yml'
   workflow_dispatch:
 
@@ -19,7 +20,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Syntax check
-        run: node --check migration/build-source-identity-layer.mjs
+        run: |
+          node --check migration/build-source-identity-layer.mjs
+          node --check migration/test-management-edit-preservation.mjs
 
       - name: Build source Store Identity & Schedule layer
         env:
@@ -30,12 +33,25 @@ jobs:
           SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
         run: node migration/build-source-identity-layer.mjs
 
-      - name: Verify migration builder cannot touch protected production tables or photos
+      - name: Controlled management-edit preservation test
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+          TEST_STORE_ID: SMF-0001
+          TEST_SCHEDULED_DATE: '2099-12-31'
+        run: node migration/test-management-edit-preservation.mjs
+
+      - name: Verify migration tools cannot touch protected production tables, Drive or photos
         run: |
           set -euo pipefail
-          if grep -nE "V4_STORES.*(update|append|PUT|POST)|V4_POE.*(update|append|PUT|POST)|V4_PHOTOS.*(update|append|PUT|POST)|files\.delete|setTrashed\(true\)" migration/build-source-identity-layer.mjs; then
+          if grep -nE "V4_STORES.*(update|append|PUT|POST)|V4_POE.*(update|append|PUT|POST)|V4_PHOTOS.*(update|append|PUT|POST)|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google" migration/build-source-identity-layer.mjs migration/test-management-edit-preservation.mjs; then
             echo "ERROR: protected production write/destructive operation detected."
             exit 1
           fi
           grep -q "TARGET_SHEET = 'STORE IDENTITY & SCHEDULE'" migration/build-source-identity-layer.mjs
+          grep -q "TARGET_SHEET = 'STORE IDENTITY & SCHEDULE'" migration/test-management-edit-preservation.mjs
           grep -q "EXPECTED_STORE_COUNT = 83" migration/build-source-identity-layer.mjs
+          grep -q "MERGE_BY_STORE_ID" migration/build-source-identity-layer.mjs
