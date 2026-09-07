@@ -18,8 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Syntax check read-only audit
-        run: node --check migration/store-identity-audit.mjs
+      - name: Syntax check migration tools
+        run: |
+          node --check migration/store-identity-audit.mjs
+          node --check migration/safe-sync-engine.mjs
 
       - name: Run read-only Store ID compatibility audit
         env:
@@ -30,11 +32,32 @@ jobs:
           SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
         run: node migration/store-identity-audit.mjs
 
-      - name: Upload audit report
+      - name: Run Safe Sync engine in DRY_RUN mode only
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+          SAFE_SYNC_MODE: DRY_RUN
+        run: node migration/safe-sync-engine.mjs
+
+      - name: Verify no write mode is enabled in CI
+        run: |
+          grep -q "writeImplementationEnabled: false" migration/safe-sync-engine.mjs
+          grep -q "APPLY BLOCKED BY DESIGN" migration/safe-sync-engine.mjs
+          if grep -RniE "spreadsheets\.values\.(update|append)|batchUpdate|files\.delete|setTrashed\(true\)" migration; then
+            echo "ERROR: write/destructive operation detected in migration tools."
+            exit 1
+          fi
+
+      - name: Upload audit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: store-identity-audit
-          path: migration/audit-output/
+          path: |
+            migration/audit-output/
+            migration/safe-sync-output/
           if-no-files-found: error
           retention-days: 14
