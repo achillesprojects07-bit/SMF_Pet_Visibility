@@ -55,9 +55,9 @@ function runBuilder(){
   const r=spawnSync(process.execPath,['migration/build-source-identity-layer.mjs'],{encoding:'utf8',env:process.env});
   if(r.status!==0)throw new Error(`Identity builder failed (${r.status}):\n${r.stdout}\n${r.stderr}`);
   const out=text(r.stdout);
-  const start=out.lastIndexOf('{');
-  if(start<0)throw new Error(`Could not parse builder output: ${out}`);
-  return {raw:out,json:JSON.parse(out.slice(start))};
+  if(!out)throw new Error('Identity builder returned empty output.');
+  try{return {raw:out,json:JSON.parse(out)};}
+  catch(err){throw new Error(`Could not parse builder JSON output: ${err.message}\n${out}`);}
 }
 async function protectedSnapshot(token){
   const [stores,poe,photos]=await Promise.all([
