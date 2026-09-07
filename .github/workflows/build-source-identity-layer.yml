@@ -1,0 +1,41 @@
+name: Build SMF Source Identity Layer
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/build-source-identity-layer.mjs'
+      - '.github/workflows/build-source-identity-layer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/build-source-identity-layer.mjs
+
+      - name: Build source Store Identity & Schedule layer
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/build-source-identity-layer.mjs
+
+      - name: Verify migration builder cannot touch protected production tables or photos
+        run: |
+          set -euo pipefail
+          if grep -nE "V4_STORES.*(update|append|PUT|POST)|V4_POE.*(update|append|PUT|POST)|V4_PHOTOS.*(update|append|PUT|POST)|files\.delete|setTrashed\(true\)" migration/build-source-identity-layer.mjs; then
+            echo "ERROR: protected production write/destructive operation detected."
+            exit 1
+          fi
+          grep -q "TARGET_SHEET = 'STORE IDENTITY & SCHEDULE'" migration/build-source-identity-layer.mjs
+          grep -q "EXPECTED_STORE_COUNT = 83" migration/build-source-identity-layer.mjs
