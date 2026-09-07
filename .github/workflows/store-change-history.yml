@@ -47,7 +47,9 @@ jobs:
           grep -q "HISTORY_SHEET = 'STORE CHANGE HISTORY'" migration/store-change-history.mjs
           grep -q "historyPolicy:'APPEND_ONLY'" migration/store-change-history.mjs
           grep -q "EXPECTED_BASELINE_COUNT = 83" migration/store-change-history.mjs
-          if grep -nE "V4_STORES|V4_POE|V4_PHOTOS|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google|workers\.dev|script\.google" migration/store-change-history.mjs; then
-            echo "ERROR: protected production/runtime reference detected in change-history writer."
+          grep -q "if(!range.startsWith(\`'\${HISTORY_SHEET}'!\`))throw new Error(\`Refusing write outside \${HISTORY_SHEET}: \${range}\`)" migration/store-change-history.mjs
+          grep -q "if(!range.startsWith(\`'\${HISTORY_SHEET}'!\`))throw new Error(\`Refusing append outside \${HISTORY_SHEET}: \${range}\`)" migration/store-change-history.mjs
+          if grep -nE "INTERNAL_SHEET_ID|1TNrb3ir8vS6CyZ8kXhRH43JXoH4Ws7iQ4g3649KQTf0|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google|workers\.dev|script\.google" migration/store-change-history.mjs; then
+            echo "ERROR: protected production/runtime endpoint or destructive operation detected in change-history writer."
             exit 1
           fi
