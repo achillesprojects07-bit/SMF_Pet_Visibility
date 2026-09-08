@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
-          CHANGED=$(git diff --name-only origin/main...HEAD)
+          CHANGED=$(git diff --name-only origin/main HEAD)
           printf '%s\n' "$CHANGED"
           if printf '%s\n' "$CHANGED" | grep -E '^(app\.js|photo-v6/worker\.js|api-worker/worker\.js|backend/ApiV5\.gs)$'; then
             echo "ERROR: frozen upload/runtime file changed in migration branch."
