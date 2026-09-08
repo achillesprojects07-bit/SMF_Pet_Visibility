@@ -1,0 +1,62 @@
+name: Controlled Store Add Edit Planner
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/store-change-planner.mjs'
+      - '.github/workflows/store-change-planner.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migration/store-change-planner.mjs'
+      - '.github/workflows/store-change-planner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  planner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/store-change-planner.mjs
+
+      - name: Run isolated policy self tests
+        run: node migration/store-change-planner.mjs --self-test
+
+      - name: Run live read-only planner
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/store-change-planner.mjs
+
+      - name: Prove planner cannot write or delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "const MODE = 'DRY_RUN'" migration/store-change-planner.mjs
+          grep -q "writeImplementationEnabled:false" migration/store-change-planner.mjs
+          grep -q "SOURCE_ABSENCE_NEVER_MEANS_DELETE" migration/store-change-planner.mjs
+          grep -q "LEGACY_STORE_KEY_MISMATCH_IMMUTABLE" migration/store-change-planner.mjs
+          grep -q "STORE_ID_ONLY" migration/store-change-planner.mjs
+          if grep -nE "method:'PUT'|method: 'PUT'|values.*append|batchUpdate|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google|workers\.dev|script\.google" migration/store-change-planner.mjs; then
+            echo "ERROR: write/destructive/runtime path detected in store-change planner."
+            exit 1
+          fi
+
+      - name: Upload dry-run plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-change-plan
+          path: migration/store-change-output/
+          if-no-files-found: warn
+          retention-days: 14
