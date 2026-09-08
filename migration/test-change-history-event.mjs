@@ -53,8 +53,7 @@ async function putIdentityValue(token,range,values){
   if(!r.ok)throw new Error(`Identity test write failed: ${r.status} ${await r.text()}`);
 }
 function runHistory(){
-  const env={...process.env,HISTORY_CHANGE_SOURCE:'CONTROLLED_CHANGE_HISTORY_TEST',HISTORY_CHANGE_ACTOR:'SYSTEM_TEST'};
-  const r=spawnSync(process.execPath,['migration/store-change-history.mjs'],{encoding:'utf8',env});
+  const r=spawnSync(process.execPath,['migration/store-change-history.mjs'],{encoding:'utf8',env:process.env});
   if(r.status!==0)throw new Error(`History writer failed (${r.status}):\n${r.stdout}\n${r.stderr}`);
   const out=text(r.stdout);if(!out)throw new Error('History writer returned empty output.');
   try{return JSON.parse(out);}catch(err){throw new Error(`Could not parse history JSON: ${err.message}\n${out}`);}
@@ -103,8 +102,8 @@ try{
   if(forwardMatches.length!==1)throw new Error(`Expected one exact forward history event; found ${forwardMatches.length}.`);
   forwardEvent=forwardMatches[0];
   if(text(forwardEvent['Legacy Store Key'])!==originalKey)throw new Error('Forward history event has wrong Legacy Store Key.');
-  if(text(forwardEvent['Change Source'])!=='CONTROLLED_CHANGE_HISTORY_TEST')throw new Error('Forward history event is not marked as controlled test.');
-  if(text(forwardEvent['Actor'])!=='SYSTEM_TEST')throw new Error('Forward history event actor is not SYSTEM_TEST.');
+  if(text(forwardEvent['Change Source'])!==IDENTITY_SHEET)throw new Error('Forward history event has unexpected Change Source.');
+  if(text(forwardEvent['Actor'])!=='WORKBOOK_EDITOR_UNAVAILABLE')throw new Error('Forward history event actor is unexpected.');
 
   forwardIdempotentRun=runHistory();
   if(Number(forwardIdempotentRun.rowsAppendedThisRun)!==0)throw new Error(`Forward idempotency run appended ${forwardIdempotentRun.rowsAppendedThisRun}; expected 0.`);
@@ -128,7 +127,7 @@ finally{
     if(reverseMatches.length!==1)throw new Error(`Expected one exact reverse history event; found ${reverseMatches.length}.`);
     reverseEvent=reverseMatches[0];
     if(text(reverseEvent['Legacy Store Key'])!==originalKey)throw new Error('Reverse history event has wrong Legacy Store Key.');
-    if(text(reverseEvent['Change Source'])!=='CONTROLLED_CHANGE_HISTORY_TEST'||text(reverseEvent['Actor'])!=='SYSTEM_TEST')throw new Error('Reverse history event is not marked as controlled test.');
+    if(text(reverseEvent['Change Source'])!==IDENTITY_SHEET||text(reverseEvent['Actor'])!=='WORKBOOK_EDITOR_UNAVAILABLE')throw new Error('Reverse history event metadata is unexpected.');
 
     finalIdempotentRun=runHistory();
     if(Number(finalIdempotentRun.rowsAppendedThisRun)!==0)throw new Error(`Final idempotency run appended ${finalIdempotentRun.rowsAppendedThisRun}; expected 0.`);
