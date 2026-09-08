@@ -1,0 +1,82 @@
+name: New Store Compatibility Proof
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/new-store-compatibility-proof.mjs'
+      - '.github/workflows/new-store-compatibility-proof.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migration/new-store-compatibility-proof.mjs'
+      - '.github/workflows/new-store-compatibility-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/new-store-compatibility-proof.mjs
+
+      - name: Run isolated proof tests
+        run: node migration/new-store-compatibility-proof.mjs --self-test
+
+      - name: Run live read-only compatibility proof
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/new-store-compatibility-proof.mjs
+
+      - name: Prove no write path exists in compatibility proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "const MODE = 'READ_ONLY_PROOF'" migration/new-store-compatibility-proof.mjs
+          grep -q "const writeImplementationEnabled = false" migration/new-store-compatibility-proof.mjs
+          if grep -nE "method:'PUT'|method: 'PUT'|method:'PATCH'|method: 'PATCH'|method:'DELETE'|method: 'DELETE'|values.*append|batchUpdate|files\.delete|createFolder|method:'POST'.*drive/v3/files" migration/new-store-compatibility-proof.mjs; then
+            echo "ERROR: write/destructive path detected in compatibility proof."
+            exit 1
+          fi
+
+      - name: Ensure frozen upload/runtime files match main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          for f in app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs; do
+            if ! git diff --quiet origin/main HEAD -- "$f"; then
+              echo "ERROR: frozen upload/runtime file differs from main: $f"
+              exit 1
+            fi
+          done
+          echo "Frozen upload/runtime files unchanged."
+
+      - name: Verify existing uploader/provisioning separation remains intact
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "Existing POE folder not found" photo-v6/worker.js
+          grep -q "createsFolders:false" photo-v6/worker.js
+          grep -q "const live = await getOrCreate(ROOT_ID,'LIVE',{allowCreate:false})" photo-v6/provision-folders.mjs
+          grep -q "Provisioning is idempotent and creates only missing folders" .github/workflows/provision-poe-folders.yml
+
+      - name: Upload proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-store-compatibility-proof
+          path: migration/new-store-proof-output/
+          if-no-files-found: warn
+          retention-days: 14
