@@ -1,12 +1,8 @@
 name: Build SMF Source Identity Layer
 
+# WRITE-CAPABLE MIGRATION WORKFLOW.
+# Manual-only by design: code pushes must never mutate the source workbook automatically.
 on:
-  push:
-    branches: [store-id-compat-audit]
-    paths:
-      - 'migration/build-source-identity-layer.mjs'
-      - 'migration/test-management-edit-preservation.mjs'
-      - '.github/workflows/build-source-identity-layer.yml'
   workflow_dispatch:
 
 permissions:
