@@ -145,7 +145,7 @@ if(process.argv.includes('--self-test')){
 
   const invariants={
     noWrites:true,
-    uploadRuntimeFilesRequiredToChange:false,
+    uploadRuntimeFilesUnchangedRequired:true,
     nextStoreIdUnique:idUnique,
     compatibilityStoreKeyUnique:specimen.storeKeyUnique,
     materialDefinitionsPresent:defs.size>=6,
@@ -159,8 +159,8 @@ if(process.argv.includes('--self-test')){
     storeFolderCreationSeparatedFromUploader:true,
     writeImplementationDisabled:writeImplementationEnabled===false
   };
-  const report={generatedAt:new Date().toISOString(),mode:MODE,writeImplementationEnabled,identityRows:identityRows.length,liveStores:liveStores.length,materialSets:[...defs.keys()],materialValidation,ruleMap:rules,ruleConflicts,proposedNextStoreId:proposedStoreId,specimen,drive,invariants,fingerprint:stableHash({identityRows,liveStores,materialSets:[...defs.entries()]})};
+  const report={generatedAt:new Date().toISOString(),mode:MODE,writeImplementationEnabled,uploadRuntimeFilesRequiredToChange:false,identityRows:identityRows.length,liveStores:liveStores.length,materialSets:[...defs.keys()],materialValidation,ruleMap:rules,ruleConflicts,proposedNextStoreId:proposedStoreId,specimen,drive,invariants,fingerprint:stableHash({identityRows,liveStores,materialSets:[...defs.entries()]})};
   fs.mkdirSync(OUT_DIR,{recursive:true}); fs.writeFileSync(`${OUT_DIR}/new-store-compatibility-proof.json`,JSON.stringify(report,null,2));
-  console.log(JSON.stringify({mode:MODE,writeImplementationEnabled:false,identityRows:identityRows.length,liveStores:liveStores.length,proposedNextStoreId:proposedStoreId,materialSets:[...defs.keys()],materialValidation:{checkedCount:materialValidation.checkedCount,mismatchCount:materialValidation.mismatchCount},ruleConflicts:ruleConflicts.length,specimen,drive,invariants,fingerprint:report.fingerprint},null,2));
+  console.log(JSON.stringify({mode:MODE,writeImplementationEnabled:false,uploadRuntimeFilesRequiredToChange:false,identityRows:identityRows.length,liveStores:liveStores.length,proposedNextStoreId:proposedStoreId,materialSets:[...defs.keys()],materialValidation:{checkedCount:materialValidation.checkedCount,mismatchCount:materialValidation.mismatchCount},ruleConflicts:ruleConflicts.length,specimen,drive,invariants,fingerprint:report.fingerprint},null,2));
   if(Object.values(invariants).some(v=>v!==true))process.exitCode=2;
 }
