@@ -29,14 +29,27 @@ jobs:
       - name: Run isolated policy self tests
         run: node migration/store-change-planner.mjs --self-test
 
-      - name: Run live read-only planner
+      - name: Run live read-only planner and enforce integrity
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
-        run: node migration/store-change-planner.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(node migration/store-change-planner.mjs)"
+          echo "$out"
+          node -e '
+            const x=JSON.parse(process.argv[1]);
+            const bad=Object.entries(x.invariants).filter(([k,v])=>k!=="writesEnabled"&&v!==true);
+            if (x.writeImplementationEnabled !== false) throw new Error("writeImplementationEnabled must remain false");
+            if (x.invariants.writesEnabled !== false) throw new Error("writesEnabled invariant must remain false");
+            if (x.counts.DELETE !== 0) throw new Error("DELETE must remain zero");
+            if (x.counts.BLOCKED !== 0) throw new Error(`Blocked store-change records require review: ${x.counts.BLOCKED}`);
+            if (bad.length) throw new Error(`Integrity invariant failure: ${bad.map(([k])=>k).join(", ")}`);
+          ' "$out"
 
       - name: Prove planner cannot write or delete
         shell: bash
