@@ -1,0 +1,67 @@
+name: Production One Store Transaction Guard
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/production-one-store-transaction.mjs
+
+      - name: Run isolated transaction tests
+        run: node migration/production-one-store-transaction.mjs --self-test
+
+      - name: Read live transaction status only
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/production-one-store-transaction.mjs
+
+      - name: Prove both production stages remain hard locked
+        run: |
+          grep -q "const PRODUCTION_PREPARE_UNLOCKED=false" migration/production-one-store-transaction.mjs
+          grep -q "const PRODUCTION_FINALIZE_UNLOCKED=false" migration/production-one-store-transaction.mjs
+          grep -q "const INACTIVE_STAGING_ALLOWED=false" migration/production-one-store-transaction.mjs
+          grep -q "prepareHardLocked:PRODUCTION_PREPARE_UNLOCKED===false" migration/production-one-store-transaction.mjs
+          grep -q "finalizeHardLocked:PRODUCTION_FINALIZE_UNLOCKED===false" migration/production-one-store-transaction.mjs
+
+      - name: Prove protected targets have no write path
+        run: |
+          ! grep -Eq "method:'DELETE'|method:\"DELETE\"" migration/production-one-store-transaction.mjs
+          ! grep -Eq "batchValueWrite\(tok,INTERNAL_SHEET_ID" migration/production-one-store-transaction.mjs
+          ! grep -Eq "appendValues\(tok,INTERNAL_SHEET_ID,'V4_POE|appendValues\(tok,INTERNAL_SHEET_ID,'V4_PHOTOS" migration/production-one-store-transaction.mjs
+          grep -q "appendValues(tok,INTERNAL_SHEET_ID,'V4_STORES!A:S'" migration/production-one-store-transaction.mjs
+          grep -q "batchValueWrite(tok,SOURCE_SHEET_ID" migration/production-one-store-transaction.mjs
+          grep -q "'Active':'TRUE'" migration/production-one-store-transaction.mjs
+
+      - name: Prove uploader and runtime files match main
+        run: |
+          git fetch origin main --depth=1
+          for f in app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs; do
+            git diff --quiet origin/main -- "$f" || { echo "Frozen file changed: $f"; exit 1; }
+          done
+          echo "Frozen upload/runtime files unchanged."
+
+      - name: Ensure existing executor remains locked
+        run: |
+          grep -q "const PRODUCTION_APPLY_UNLOCKED=false" migration/manual-one-store-apply-executor.mjs
+          grep -q "const FIELD_VISIBILITY_CONTAINMENT_PROVEN=false" migration/manual-one-store-apply-executor.mjs
+
+      - name: Upload status report
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-one-store-transaction-status
+          path: migration/final-transaction-output/production-one-store-transaction.json
