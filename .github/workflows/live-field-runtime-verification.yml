@@ -16,10 +16,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Syntax check
-        run: node --check migration/live-field-runtime-verification.mjs
+        run: node --check migration/live-field-runtime-verification-v2.mjs
 
       - name: Run isolated verifier tests
-        run: node migration/live-field-runtime-verification.mjs --self-test
+        env:
+          FIELD_BROWSER_ORIGIN: https://achillesprojects07-bit.github.io
+        run: node migration/live-field-runtime-verification-v2.mjs --self-test
 
       - name: Run deployed Field API read-only verification
         env:
@@ -28,13 +30,14 @@ jobs:
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           FIELD_API_BASE_URL: https://smf-pet-visibility-api.achilles-projects07.workers.dev
-        run: node migration/live-field-runtime-verification.mjs
+          FIELD_BROWSER_ORIGIN: https://achillesprojects07-bit.github.io
+        run: node migration/live-field-runtime-verification-v2.mjs
 
       - name: Prove verifier contains no production write call
         run: |
-          ! grep -Eq "putRange\(|appendRange\(|batchUpdate|values:append|method:'PUT'|method:\"PUT\"" migration/live-field-runtime-verification.mjs
-          grep -q "WRITE ACTION FORBIDDEN IN LIVE VERIFIER" migration/live-field-runtime-verification.mjs
-          grep -q "productionApplyUnlockAllowed:false" migration/live-field-runtime-verification.mjs
+          ! grep -Eq "putRange\(|appendRange\(|batchUpdate|values:append|method:'PUT'|method:\"PUT\"" migration/live-field-runtime-verification-v2.mjs
+          grep -q "WRITE ACTION FORBIDDEN" migration/live-field-runtime-verification-v2.mjs
+          grep -q "productionApplyUnlockAllowed:false" migration/live-field-runtime-verification-v2.mjs
 
       - name: Ensure executor remains hard locked
         run: |
