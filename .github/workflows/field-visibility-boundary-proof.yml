@@ -1,0 +1,94 @@
+name: Field Visibility Boundary Proof
+
+on:
+  pull_request:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/field-visibility-boundary-proof.mjs'
+      - 'migration/manual-one-store-apply-executor.mjs'
+      - 'api-worker/worker.js'
+      - 'backend/ApiV5.gs'
+      - '.github/workflows/field-visibility-boundary-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  boundary-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/field-visibility-boundary-proof.mjs
+
+      - name: Run isolated proof tests
+        run: node migration/field-visibility-boundary-proof.mjs --self-test
+
+      - name: Run repository boundary proof
+        run: node migration/field-visibility-boundary-proof.mjs
+
+      - name: Fail closed unless legacy Field filtering is actually auditable
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT=migration/field-visibility-proof-output/field-visibility-boundary-proof.json
+          jq -e '.fieldVisibilityBoundaryProven == false' "$REPORT" >/dev/null
+          jq -e '.productionApplyMayUnlock == false' "$REPORT" >/dev/null
+          jq -e '.boundary.activeFalseGuaranteedHidden == false' "$REPORT" >/dev/null
+          jq -e '.boundary.requiredContainmentStrategy == "NO_V4_STORES_STAGING_UNTIL_FIELD_BOUNDARY_IS_PROVEN"' "$REPORT" >/dev/null
+          jq -e '.invariants.executorHardLockStillPresent == true' "$REPORT" >/dev/null
+          echo 'Field visibility is not assumed; production APPLY remains locked.'
+
+      - name: Prove Field read path delegates to legacy Apps Script implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "'getFieldHomeV4'" api-worker/worker.js >/dev/null
+          grep -F "'getStoreV4'" api-worker/worker.js >/dev/null
+          grep -F "'getFieldHomeV4':getFieldHomeV4" backend/ApiV5.gs >/dev/null
+          grep -F "'getStoreV4':getStoreV4" backend/ApiV5.gs >/dev/null
+          if grep -Eq 'function[[:space:]]+getFieldHomeV4[[:space:]]*\(' backend/ApiV5.gs; then
+            echo 'Unexpected: getFieldHomeV4 implementation appeared in ApiV5.gs. Re-review boundary proof.'
+            exit 1
+          fi
+          echo 'Field filtering remains delegated to external legacy backend; no assumption accepted.'
+
+      - name: Ensure executor cannot unlock while boundary is unproven
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'const PRODUCTION_APPLY_UNLOCKED=false;' migration/manual-one-store-apply-executor.mjs >/dev/null
+          grep -F 'const FIELD_VISIBILITY_CONTAINMENT_PROVEN=false;' migration/manual-one-store-apply-executor.mjs >/dev/null
+          if node migration/manual-one-store-apply-executor.mjs --apply >/tmp/apply.out 2>/tmp/apply.err; then
+            echo 'Executor unexpectedly allowed APPLY.'
+            exit 1
+          fi
+          grep -E 'HARD-LOCKED|containment is not proven' /tmp/apply.err >/dev/null
+          echo 'Executor hard lock verified.'
+
+      - name: Ensure frozen upload/runtime files match main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          CHANGED=$(git diff --name-only origin/main HEAD -- app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs || true)
+          # api-worker/worker.js and backend/ApiV5.gs are allowed only if they were already part of migration baseline;
+          # this build itself must not change any frozen runtime file relative to the branch parent.
+          CURRENT=$(git diff --name-only HEAD^ HEAD -- app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs || true)
+          if [ -n "$CURRENT" ]; then
+            echo 'This boundary-proof build modified frozen runtime/upload files:'
+            echo "$CURRENT"
+            exit 1
+          fi
+          echo 'Boundary-proof build did not modify frozen runtime/upload files.'
+
+      - name: Upload boundary proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-visibility-boundary-proof
+          path: migration/field-visibility-proof-output/
+          retention-days: 14
