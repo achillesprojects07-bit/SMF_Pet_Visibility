@@ -16,7 +16,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Syntax check
-        run: node --check migration/production-one-store-dry-run.mjs
+        run: |
+          node --check migration/production-one-store-dry-run.mjs
+          node --check migration/production-one-store-dry-run-audit.mjs
 
       - name: Run isolated dry-run tests
         run: node migration/production-one-store-dry-run.mjs --self-test
@@ -31,12 +33,16 @@ jobs:
           POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
         run: node migration/production-one-store-dry-run.mjs
 
+      - name: Run semantic safety audit
+        run: node migration/production-one-store-dry-run-audit.mjs
+
       - name: Prove dry run cannot write production
         run: |
           ! grep -Eq "values:append|batchUpdate|method:'PUT'|method:\"PUT\"|method:'PATCH'|method:\"PATCH\"|method:'DELETE'|method:\"DELETE\"" migration/production-one-store-dry-run.mjs
           grep -q "const PRODUCTION_WRITE_ENABLED=false" migration/production-one-store-dry-run.mjs
           grep -q "const FIELD_ACTIVATION_ENABLED=false" migration/production-one-store-dry-run.mjs
           grep -q "realStoreApplied:false" migration/production-one-store-dry-run.mjs
+          ! grep -Eq "fetch\(|https://|values:append|batchUpdate" migration/production-one-store-dry-run-audit.mjs
 
       - name: Ensure one-store and protected-data assertions exist
         run: |
@@ -45,6 +51,10 @@ jobs:
           grep -q "v4PhotosUnchanged" migration/production-one-store-dry-run.mjs
           grep -q "noDriveWrites" migration/production-one-store-dry-run.mjs
           grep -q "noDeletes" migration/production-one-store-dry-run.mjs
+          grep -q "noDeleteRequired" migration/production-one-store-dry-run-audit.mjs
+          grep -q "noUploadRuntimeChangeRequired" migration/production-one-store-dry-run-audit.mjs
+          grep -q "driveRootChecked" migration/production-one-store-dry-run-audit.mjs
+          grep -q "driveAreaParentExists" migration/production-one-store-dry-run-audit.mjs
 
       - name: Ensure executor remains hard locked
         run: |
@@ -59,8 +69,10 @@ jobs:
           done
           echo "Frozen upload/runtime files unchanged."
 
-      - name: Upload dry-run report
+      - name: Upload dry-run reports
         uses: actions/upload-artifact@v4
         with:
           name: production-one-store-dry-run
-          path: migration/production-one-store-dry-run-output/production-one-store-dry-run.json
+          path: |
+            migration/production-one-store-dry-run-output/production-one-store-dry-run.json
+            migration/production-one-store-dry-run-output/production-one-store-dry-run-audit.json
