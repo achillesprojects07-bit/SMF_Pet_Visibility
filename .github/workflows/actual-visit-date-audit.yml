@@ -1,0 +1,50 @@
+name: SMF Actual Visit Date Audit
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/actual-visit-date-audit.mjs'
+      - '.github/workflows/actual-visit-date-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/actual-visit-date-audit.mjs
+
+      - name: Run read-only Actual Visit Date evidence audit
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/actual-visit-date-audit.mjs
+
+      - name: Verify read-only safety boundary
+        run: |
+          set -euo pipefail
+          if grep -niE "values\.update|values\.append|batchUpdate|method:'PUT'|method:'POST'.*sheets|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google|workers\.dev|script\.google" migration/actual-visit-date-audit.mjs; then
+            echo "ERROR: write/destructive/runtime operation detected in Actual Visit Date audit."
+            exit 1
+          fi
+          grep -q "writesEnabled:false" migration/actual-visit-date-audit.mjs
+          grep -q "deletes:0" migration/actual-visit-date-audit.mjs
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: actual-visit-date-audit
+          path: migration/actual-visit-audit-output/
+          if-no-files-found: error
+          retention-days: 14
