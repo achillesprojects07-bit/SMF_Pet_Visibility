@@ -157,7 +157,7 @@ if(process.argv.includes('--self-test')){
     teamDriveFolderExists:drive.checked?drive.teamExists:true,
     areaDriveFolderExists:drive.checked?drive.areaExists:true,
     storeFolderCreationSeparatedFromUploader:true,
-    writeImplementationEnabled:false
+    writeImplementationDisabled:writeImplementationEnabled===false
   };
   const report={generatedAt:new Date().toISOString(),mode:MODE,writeImplementationEnabled,identityRows:identityRows.length,liveStores:liveStores.length,materialSets:[...defs.keys()],materialValidation,ruleMap:rules,ruleConflicts,proposedNextStoreId:proposedStoreId,specimen,drive,invariants,fingerprint:stableHash({identityRows,liveStores,materialSets:[...defs.entries()]})};
   fs.mkdirSync(OUT_DIR,{recursive:true}); fs.writeFileSync(`${OUT_DIR}/new-store-compatibility-proof.json`,JSON.stringify(report,null,2));
