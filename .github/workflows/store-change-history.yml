@@ -1,12 +1,8 @@
 name: SMF Store Change History
 
+# WRITE-CAPABLE MIGRATION WORKFLOW.
+# Manual-only by design: automated code pushes must never append source history or create test events.
 on:
-  push:
-    branches: [store-id-compat-audit]
-    paths:
-      - 'migration/store-change-history.mjs'
-      - 'migration/test-change-history-event.mjs'
-      - '.github/workflows/store-change-history.yml'
   workflow_dispatch:
 
 permissions:
