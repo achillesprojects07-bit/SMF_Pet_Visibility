@@ -65,6 +65,17 @@ jobs:
             exit 1
           fi
 
+      - name: Enforce manual-only source-write workflows
+        run: |
+          set -euo pipefail
+          for f in .github/workflows/build-source-identity-layer.yml .github/workflows/store-change-history.yml; do
+            grep -q 'workflow_dispatch:' "$f"
+            if grep -qE '^[[:space:]]+push:' "$f"; then
+              echo "ERROR: write-capable migration workflow must remain manual-only: $f"
+              exit 1
+            fi
+          done
+
       - name: Upload audit reports
         if: always()
         uses: actions/upload-artifact@v4
