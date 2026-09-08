@@ -3,11 +3,12 @@
 
   // Admin store-detail UX only. No API calls and no data writes.
   // The existing admin.js remains responsible for fetching/opening the store.
-  // This guard provides immediate feedback, focuses the detail view, and preserves
-  // the current search/filter state when returning to the store list.
+  // This guard provides immediate feedback, a focused detail view, and preserves
+  // the current search/filter state and scroll position when returning to the list.
 
   let openingButton=null;
   let openingTimer=null;
+  let savedScrollY=0;
 
   function detail(){return document.getElementById('adminStoreDetail')}
   function list(){return document.getElementById('storeTableWrap')}
@@ -17,10 +18,24 @@
     return row?.querySelector('td b')?.textContent?.trim()||'store';
   }
 
+  function escapeHtml(v){
+    return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function focusDetail(){
+    const d=detail();
+    if(!d)return;
+    d.classList.add('adminStoreDetailFocused');
+    d.scrollTop=0;
+    document.documentElement.classList.add('adminDetailOpen');
+    document.body.classList.add('adminDetailOpen');
+  }
+
   function beginOpening(target){
     const d=detail(),l=list();
     if(!d||!l)return;
 
+    savedScrollY=window.scrollY;
     const button=target.closest?.('.adminOpenStore');
     openingButton=button||null;
     if(openingButton){
@@ -33,7 +48,7 @@
     const name=storeNameFromTarget(target);
     d.innerHTML=`<section class="card loading adminOpeningCard" role="status" aria-live="polite"><div class="adminOpeningSpinner" aria-hidden="true"></div><div><b>Opening ${escapeHtml(name)}…</b><div class="small">Loading store details and POE.</div></div></section>`;
     l.classList.add('adminStoreListOpening');
-    d.scrollIntoView({behavior:'smooth',block:'start'});
+    focusDetail();
 
     clearTimeout(openingTimer);
     openingTimer=setTimeout(()=>{
@@ -43,10 +58,6 @@
         addBackButton();
       }
     },10000);
-  }
-
-  function escapeHtml(v){
-    return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
   function finishOpeningButton(){
@@ -62,13 +73,14 @@
     clearTimeout(openingTimer);
     finishOpeningButton();
     const d=detail(),l=list();
-    if(d)d.innerHTML='';
-    if(l){
-      l.classList.remove('adminStoreListOpening','adminStoreListHidden');
-      l.scrollIntoView({behavior:'smooth',block:'start'});
-    }else{
-      document.getElementById('storeStatus')?.scrollIntoView({behavior:'smooth',block:'center'});
+    if(d){
+      d.classList.remove('adminStoreDetailFocused');
+      d.innerHTML='';
     }
+    document.documentElement.classList.remove('adminDetailOpen');
+    document.body.classList.remove('adminDetailOpen');
+    if(l)l.classList.remove('adminStoreListOpening','adminStoreListHidden');
+    requestAnimationFrame(()=>window.scrollTo({top:savedScrollY,behavior:'smooth'}));
   }
 
   function addBackButton(){
@@ -78,8 +90,8 @@
     const firstCard=d.querySelector('section.card');
     if(!firstCard)return;
 
-    // Keep the store list out of the way while a store is opening or displayed.
     if(l)l.classList.add('adminStoreListHidden');
+    focusDetail();
 
     // Wait for the real detail or the long-wait message before adding navigation.
     if(firstCard.classList.contains('loading')&&!firstCard.classList.contains('adminOpeningCard'))return;
@@ -100,6 +112,7 @@
 
     bar.appendChild(button);
     d.insertBefore(bar,d.firstChild);
+    d.scrollTop=0;
   }
 
   // Capture the user's intent first, then allow admin.js's existing delegated click
@@ -116,8 +129,9 @@
     const realCard=d.querySelector('section.card:not(.adminOpeningCard)');
     if(realCard){
       list()?.classList.add('adminStoreListHidden');
-      realCard.scrollIntoView({behavior:'smooth',block:'start'});
+      focusDetail();
       addBackButton();
+      d.scrollTop=0;
     }
   });
   observer.observe(document.documentElement,{childList:true,subtree:true});
