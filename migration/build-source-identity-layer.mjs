@@ -10,6 +10,7 @@
  * - Store ID and Legacy Store Key are immutable
  * - management-editable fields are preserved exactly when an identity row already exists
  * - Actual Visit Date / Previous Name / Identity Status are system-maintained
+ * - Actual Visit Date uses the locked field-operations rule: earliest qualifying final visit
  * - never writes V4_STORES, V4_POE, V4_PHOTOS, Apps Script, Cloudflare, or Drive files/folders
  * - never deletes rows or files
  * - aborts before writing unless all 83 baseline source stores resolve one-to-one to the 83 live Store IDs
@@ -20,6 +21,8 @@ const INTERNAL_SHEET_ID = process.env.GOOGLE_SHEET_ID || '1TNrb3ir8vS6CyZ8kXhRH4
 const TARGET_SHEET = 'STORE IDENTITY & SCHEDULE';
 const EXPECTED_STORE_COUNT = 83;
 const MERGE_POLICY = 'MERGE_BY_STORE_ID';
+const ACTUAL_VISIT_POLICY = 'EARLIEST_QUALIFYING_FINAL_FIELD_OUTCOME';
+const FINAL_VISIT_STATUSES = new Set(['COMPLETED','INCOMPLETE','REFUSED','CLOSED']);
 
 const HEADERS = ['Store ID','Current Store Name','Previous Name','Assigned Team','Route Day','Route Stop','Scheduled Deployment Date','Scheduled Stop','Actual Visit Date','Store Category','Street Address / Location','Barangay / District','City / Area','Material Allocation','Active','Legacy Store Key','Identity Status','Last Identity Sync'];
 const MANAGEMENT_FIELDS = ['Current Store Name','Assigned Team','Route Day','Route Stop','Scheduled Deployment Date','Scheduled Stop','Store Category','Street Address / Location','Barangay / District','City / Area','Material Allocation','Active'];
@@ -34,10 +37,22 @@ function isoScheduled(v){const s=String(v||'').trim();const m=s.match(/^Sept\s+(
 function dateOnly(v){const s=String(v||'').trim();if(!s)return'';let m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);if(m)return`${m[3]}-${String(Number(m[1])).padStart(2,'0')}-${String(Number(m[2])).padStart(2,'0')}`;m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[1]}-${m[2]}-${m[3]}`:'';}
 function dateRank(v){const d=dateOnly(v);return d?Date.parse(`${d}T00:00:00Z`):0;}
 function text(v){return String(v??'').trim();}
+function upper(v){return text(v).toUpperCase();}
+function compact(v){return text(v).replace(/\s+/g,' ');}
 function same(a,b){return text(a)===text(b);}
 function mergeHistory(...values){const out=[];for(const raw of values){for(const part of String(raw??'').split(';')){const v=part.trim();if(v&&!out.some(x=>norm(x)===norm(v)))out.push(v);}}return out.join('; ');}
 function rowArray(o){return HEADERS.map(h=>o[h]??'');}
 function arraysEqual(a,b,count=17){for(let i=0;i<count;i++)if(text(a?.[i])!==text(b?.[i]))return false;return true;}
+const NO_VISIT_PATTERNS=[/hindi\s+na\s+(?:din\s+)?(?:po\s+)?(?:namin\s+)?pinuntahan/i,/di\s+na\s+(?:din\s+)?(?:po\s+)?(?:namin\s+)?pinuntahan/i,/hindi\s+(?:na\s+)?(?:po\s+)?pinuntahan/i,/sinabe.*agent.*hindi.*pinuntahan/i,/sinabi.*agent.*hindi.*pinuntahan/i];
+function explicitNoVisit(note){return NO_VISIT_PATTERNS.some(re=>re.test(note));}
+function qualifyingActualVisit(r){
+  const completedAt=text(r['Completed At']);
+  const status=upper(r['Store Status']);
+  const note=compact(r.Notes);
+  if(!completedAt||!FINAL_VISIT_STATUSES.has(status)||explicitNoVisit(note))return null;
+  const visitDate=dateOnly(completedAt);
+  return visitDate?{completedAt,visitDate,status}:null;
+}
 
 async function accessToken(){const body=new URLSearchParams({client_id:need('GOOGLE_OAUTH_CLIENT_ID'),client_secret:need('GOOGLE_OAUTH_CLIENT_SECRET'),refresh_token:need('GOOGLE_OAUTH_REFRESH_TOKEN'),grant_type:'refresh_token'});const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});const j=await r.json();if(!r.ok||!j.access_token)throw new Error(`Google OAuth refresh failed: ${r.status}`);return j.access_token;}
 async function getRange(token,id,range){const u=`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`;const r=await fetch(u,{headers:{authorization:`Bearer ${token}`}});if(!r.ok)throw new Error(`GET ${range} failed: ${r.status} ${await r.text()}`);return(await r.json()).values||[];}
@@ -63,12 +78,19 @@ const ids=live.map(s=>text(s['Store ID']));const keys=live.map(s=>text(s['Store 
 if(ids.some(v=>!v)||!unique(ids))throw new Error('Live Store IDs are blank/duplicated. No write performed.');
 if(keys.some(v=>!v)||!unique(keys))throw new Error('Live Store Keys are blank/duplicated. No write performed.');
 
-const poeByKey=new Map();
-for(const r of poe){const k=text(r['Store Key']);const completed=text(r['Completed At']);if(!k||!completed)continue;const prev=poeByKey.get(k);if(!prev||dateRank(completed)>dateRank(prev))poeByKey.set(k,completed);}
+const actualVisitByKey=new Map();
+for(const r of poe){
+  const key=text(r['Store Key']);
+  if(!key)continue;
+  const visit=qualifyingActualVisit(r);
+  if(!visit)continue;
+  const prev=actualVisitByKey.get(key);
+  if(!prev||dateRank(visit.visitDate)<dateRank(prev.visitDate))actualVisitByKey.set(key,visit);
+}
 
 const bootstrapById=new Map();const matchedIds=new Set();
 for(const src of source){const s=matchSource(src,live);const id=text(s['Store ID']);if(matchedIds.has(id))throw new Error(`Store ID matched more than once: ${id}. No write performed.`);matchedIds.add(id);const currentName=text(s['Store Name']);const sourceName=text(src['Store Name']);const previousName=norm(currentName)===norm(sourceName)?'':sourceName;bootstrapById.set(id,{
-  'Store ID':id,'Current Store Name':currentName,'Previous Name':previousName,'Assigned Team':teamNorm(s['Assigned Team']),'Route Day':text(src.Day),'Route Stop':text(src['Stop No.']),'Scheduled Deployment Date':isoScheduled(s.Day),'Scheduled Stop':text(s['Stop No.']),'Actual Visit Date':dateOnly(poeByKey.get(text(s['Store Key']))||''),'Store Category':text(s['Store Category']||src['Store Category']),'Street Address / Location':text(s.Address||src['Street Address / Location']),'Barangay / District':text(s.Barangay||src['Barangay / District']),'City / Area':text(s.Area||src['City / Area']),'Material Allocation':text(s['Material Allocation']||src['Material Allocation']),'Active':text(s.Active||'TRUE'),'Legacy Store Key':text(s['Store Key']),'Identity Status':previousName?'CURRENT_NAME_DIFFERS_FROM_ORIGINAL_SOURCE':'ACTIVE','Last Identity Sync':''
+  'Store ID':id,'Current Store Name':currentName,'Previous Name':previousName,'Assigned Team':teamNorm(s['Assigned Team']),'Route Day':text(src.Day),'Route Stop':text(src['Stop No.']),'Scheduled Deployment Date':isoScheduled(s.Day),'Scheduled Stop':text(s['Stop No.']),'Actual Visit Date':actualVisitByKey.get(text(s['Store Key']))?.visitDate||'','Store Category':text(s['Store Category']||src['Store Category']),'Street Address / Location':text(s.Address||src['Street Address / Location']),'Barangay / District':text(s.Barangay||src['Barangay / District']),'City / Area':text(s.Area||src['City / Area']),'Material Allocation':text(s['Material Allocation']||src['Material Allocation']),'Active':text(s.Active||'TRUE'),'Legacy Store Key':text(s['Store Key']),'Identity Status':previousName?'CURRENT_NAME_DIFFERS_FROM_ORIGINAL_SOURCE':'ACTIVE','Last Identity Sync':''
 });}
 if(bootstrapById.size!==EXPECTED_STORE_COUNT)throw new Error('One-to-one 83-store identity proof failed. No write performed.');
 
@@ -88,8 +110,9 @@ else{
     if(norm(merged['Current Store Name'])!==norm(base['Current Store Name']))historyCandidates.push(base['Current Store Name']);
     const sourceHistorical=base['Previous Name'];if(sourceHistorical&&norm(sourceHistorical)!==norm(merged['Current Store Name']))historyCandidates.push(sourceHistorical);
     merged['Previous Name']=mergeHistory(...historyCandidates);
-    merged['Actual Visit Date']=base['Actual Visit Date']||text(old['Actual Visit Date']);
+    merged['Actual Visit Date']=base['Actual Visit Date'];
     const pendingFields=MANAGEMENT_FIELDS.filter(f=>!same(merged[f],base[f]));
+    merged['IdentityStatus']=pendingFields.length?'MANAGEMENT_EDIT_PENDING_SYNC':(merged['Previous Name']?'ACTIVE_WITH_HISTORY':'ACTIVE');
     merged['Identity Status']=pendingFields.length?'MANAGEMENT_EDIT_PENDING_SYNC':(merged['Previous Name']?'ACTIVE_WITH_HISTORY':'ACTIVE');
     merged['Last Identity Sync']=text(old['Last Identity Sync']);
     const desired=rowArray(merged);const oldArray=HEADERS.map(h=>old[h]??'');
@@ -103,4 +126,4 @@ const verify=await getRange(token,SOURCE_SHEET_ID,`'${TARGET_SHEET}'!A1:R500`);c
 for(const id of ids){const r=verifyById.get(id);if(!r)throw new Error(`Post-merge verification failed: missing ${id}`);if(text(r['Legacy Store Key'])!==text(bootstrapById.get(id)['Legacy Store Key']))throw new Error(`Post-merge verification failed: Legacy Store Key changed for ${id}`);}
 if(!unique([...verifyById.keys()].filter(Boolean)))throw new Error('Post-merge verification failed: duplicate Store IDs.');
 
-console.log(JSON.stringify({ok:true,mergePolicy:MERGE_POLICY,sourceStoreCount:source.length,liveStoreCount:live.length,baselineStoreIdsVerified:ids.length,identityRowsPresent:verifyRows.length,rowsWrittenThisRun:changed.length,managementEditsPreserved,immutableStoreIdChecks:ids.length,immutableLegacyStoreKeyChecks:immutableChecks||ids.length,changedRows:changed,actualVisitDatesPopulated:ids.filter(id=>text(verifyById.get(id)?.['Actual Visit Date'])).length,targetSheet:TARGET_SHEET,touchedProductionRuntime:false,touchedV4Stores:false,touchedV4Poe:false,touchedV4Photos:false,touchedPhotoWorker:false,deletes:0},null,2));
+console.log(JSON.stringify({ok:true,mergePolicy:MERGE_POLICY,actualVisitPolicy:ACTUAL_VISIT_POLICY,sourceStoreCount:source.length,liveStoreCount:live.length,baselineStoreIdsVerified:ids.length,identityRowsPresent:verifyRows.length,rowsWrittenThisRun:changed.length,managementEditsPreserved,immutableStoreIdChecks:ids.length,immutableLegacyStoreKeyChecks:immutableChecks||ids.length,changedRows:changed,actualVisitDatesPopulated:ids.filter(id=>text(verifyById.get(id)?.['Actual Visit Date'])).length,targetSheet:TARGET_SHEET,touchedProductionRuntime:false,touchedV4Stores:false,touchedV4Poe:false,touchedV4Photos:false,touchedPhotoWorker:false,deletes:0},null,2));
