@@ -79,7 +79,7 @@
     }
     const target=e.target.closest?.('#storeTableWrap .adminOpenStore, #storeTableWrap .adminStoreRow');
     if(!target)return;
-    returnTab='stores';
+    returnTab=window.__smfAdminReturnTabHint==='issues'?'issues':'stores';
     openDetailSection();
   },true);
 
