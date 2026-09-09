@@ -1,0 +1,75 @@
+name: Source Master Store Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: PLAN, APPLY_RENAME, or APPLY_ADD
+        required: true
+        default: PLAN
+        type: choice
+        options:
+          - PLAN
+          - APPLY_RENAME
+          - APPLY_ADD
+      target:
+        description: Store ID for rename, source row number for add
+        required: false
+        type: string
+      expected_fingerprint:
+        description: Exact fingerprint from latest PLAN (required for APPLY)
+        required: false
+        type: string
+      approval:
+        description: Exact approval phrase for APPLY
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+  GOOGLE_SHEET_ID: 1TNrb3ir8vS6CyZ8kXhRH43JXoH4Ws7iQ4g3649KQTf0
+  POE_ROOT_FOLDER_ID: 1sD4bBdsaEqxEOfk-Q9yJIXyS_ErrLmAw
+
+jobs:
+  source-master-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/source-master-sync.mjs
+
+      - name: Self test
+        run: node migration/source-master-sync.mjs --self-test
+
+      - name: Validate APPLY inputs
+        if: ${{ inputs.mode != 'PLAN' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ inputs.target }}" || { echo 'target required'; exit 1; }
+          test -n "${{ inputs.expected_fingerprint }}" || { echo 'expected_fingerprint required'; exit 1; }
+          test "${{ inputs.approval }}" = "YES_I_APPROVE_SOURCE_MASTER_SYNC" || { echo 'approval phrase invalid'; exit 1; }
+
+      - name: Run Source Master Sync
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          SOURCE_MASTER_SYNC_MODE: ${{ inputs.mode }}
+          SOURCE_MASTER_SYNC_TARGET: ${{ inputs.target }}
+          SOURCE_MASTER_SYNC_EXPECTED_FINGERPRINT: ${{ inputs.expected_fingerprint }}
+          SOURCE_MASTER_SYNC_APPROVAL: ${{ inputs.approval }}
+        run: node migration/source-master-sync.mjs
+
+      - name: Upload PLAN report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-master-sync-${{ github.run_id }}
+          path: migration/source-master-sync-output/
+          if-no-files-found: ignore

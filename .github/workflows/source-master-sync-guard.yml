@@ -1,0 +1,57 @@
+name: Source Master Sync Guard
+
+on:
+  push:
+    branches:
+      - source-master-sync-current-main
+  pull_request:
+    paths:
+      - 'migration/source-master-sync.mjs'
+      - '.github/workflows/source-master-sync.yml'
+      - '.github/workflows/source-master-sync-guard.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Syntax check
+        run: node --check migration/source-master-sync.mjs
+
+      - name: Self test
+        run: node migration/source-master-sync.mjs --self-test
+
+      - name: Enforce protected boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=migration/source-master-sync.mjs
+          ! grep -Eq "V4_POE.*(appendRange|putRange)|V4_PHOTOS.*(appendRange|putRange)" "$FILE"
+          ! grep -Eq "files/.+delete|method:'DELETE'|method:\s*\"DELETE\"" "$FILE"
+          ! grep -Eq "rename|moveTo|removeFile|trash" "$FILE"
+          ! grep -Eq "photo-v6|api-worker|backend/ApiV5|app\.js" "$FILE"
+          grep -q "Legacy Store Key" "$FILE"
+          grep -q "fingerprint mismatch" "$FILE"
+          grep -q "YES_I_APPROVE_SOURCE_MASTER_SYNC" "$FILE"
+          grep -q "ADD_RECOVER_READY" "$FILE"
+
+      - name: Prove branch only adds sync integration files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          CHANGED=$(git diff --name-only origin/main HEAD)
+          echo "$CHANGED"
+          BAD=$(echo "$CHANGED" | grep -Ev '^(migration/source-master-sync\.mjs|\.github/workflows/source-master-sync\.yml|\.github/workflows/source-master-sync-guard\.yml)$' || true)
+          if [ -n "$BAD" ]; then
+            echo "Unexpected files changed:" >&2
+            echo "$BAD" >&2
+            exit 1
+          fi
