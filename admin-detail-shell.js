@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  // Passive Admin store-detail section controller only.
+  // Passive Admin store-detail page controller only.
   // Does not fetch data, mutate store content, observe renders, or write any data.
   // admin.js remains the sole owner of the store-detail DOM and API lifecycle.
 
@@ -29,10 +29,12 @@
     const d=detail(),section=storeSection();
     if(!d||!section)return;
     savedScrollY=window.scrollY;
+    document.body.classList.add('adminStorePageMode');
+    document.getElementById('adminApp')?.classList.add('adminStorePageMode');
     section.classList.add('adminStoreDetailMode');
     d.classList.add('adminStoreDetailInline');
     ensureBackButton()?.classList.add('isVisible');
-    requestAnimationFrame(()=>section.scrollIntoView({behavior:'auto',block:'start'}));
+    requestAnimationFrame(()=>window.scrollTo({top:0,behavior:'auto'}));
   }
 
   function closeDetail(){
@@ -42,6 +44,8 @@
       d.innerHTML='';
     }
     section?.classList.remove('adminStoreDetailMode');
+    document.body.classList.remove('adminStorePageMode');
+    document.getElementById('adminApp')?.classList.remove('adminStorePageMode');
     if(backButton)backButton.classList.remove('isVisible');
     requestAnimationFrame(()=>window.scrollTo({top:savedScrollY,behavior:'auto'}));
   }
