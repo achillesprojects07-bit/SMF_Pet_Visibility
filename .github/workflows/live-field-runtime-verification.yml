@@ -1,0 +1,59 @@
+name: Live Field Runtime Verification
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-live-field:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/live-field-runtime-verification-v2.mjs
+
+      - name: Run isolated verifier tests
+        env:
+          FIELD_BROWSER_ORIGIN: https://achillesprojects07-bit.github.io
+        run: node migration/live-field-runtime-verification-v2.mjs --self-test
+
+      - name: Run deployed Field API read-only verification
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          FIELD_API_BASE_URL: https://smf-pet-visibility-api.achilles-projects07.workers.dev
+          FIELD_BROWSER_ORIGIN: https://achillesprojects07-bit.github.io
+        run: node migration/live-field-runtime-verification-v2.mjs
+
+      - name: Prove verifier contains no production write call
+        run: |
+          ! grep -Eq "putRange\(|appendRange\(|batchUpdate|values:append|method:'PUT'|method:\"PUT\"" migration/live-field-runtime-verification-v2.mjs
+          grep -q "WRITE ACTION FORBIDDEN" migration/live-field-runtime-verification-v2.mjs
+          grep -q "productionApplyUnlockAllowed:false" migration/live-field-runtime-verification-v2.mjs
+
+      - name: Ensure executor remains hard locked
+        run: |
+          grep -q "const PRODUCTION_APPLY_UNLOCKED=false" migration/manual-one-store-apply-executor.mjs
+          grep -q "const FIELD_VISIBILITY_CONTAINMENT_PROVEN=false" migration/manual-one-store-apply-executor.mjs
+
+      - name: Ensure frozen upload/runtime files match main
+        run: |
+          git fetch origin main --depth=1
+          for f in app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs; do
+            git diff --quiet origin/main -- "$f" || { echo "Frozen file changed: $f"; exit 1; }
+          done
+          echo "Frozen upload/runtime files unchanged."
+
+      - name: Upload verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-field-runtime-verification
+          path: migration/live-field-runtime-output/live-field-runtime-verification.json

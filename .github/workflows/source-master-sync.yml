@@ -1,0 +1,80 @@
+name: Source Master Store Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: PLAN, APPLY_RENAME, or APPLY_ADD
+        required: true
+        default: PLAN
+        type: choice
+        options:
+          - PLAN
+          - APPLY_RENAME
+          - APPLY_ADD
+      target:
+        description: Store ID for rename, or source row number for add
+        required: false
+        default: ''
+      expected_fingerprint:
+        description: Exact fingerprint from the latest PLAN output; required for APPLY
+        required: false
+        default: ''
+      approval:
+        description: For APPLY enter YES_I_APPROVE_SOURCE_MASTER_SYNC
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+  GOOGLE_SHEET_ID: 1TNrb3ir8vS6CyZ8kXhRH43JXoH4Ws7iQ4g3649KQTf0
+  POE_ROOT_FOLDER_ID: 1sD4bBdsaEqxEOfk-Q9yJIXyS_ErrLmAw
+
+jobs:
+  source-master-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node version
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Self-test write boundaries
+        run: node migration/source-master-sync.mjs --self-test
+
+      - name: Guard apply inputs
+        if: ${{ inputs.mode != 'PLAN' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ inputs.target }}" || { echo 'APPLY requires target'; exit 1; }
+          test -n "${{ inputs.expected_fingerprint }}" || { echo 'APPLY requires exact PLAN fingerprint'; exit 1; }
+          test "${{ inputs.approval }}" = "YES_I_APPROVE_SOURCE_MASTER_SYNC" || { echo 'Approval phrase mismatch'; exit 1; }
+
+      - name: Run source master sync
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          SOURCE_MASTER_SYNC_MODE: ${{ inputs.mode }}
+          SOURCE_MASTER_SYNC_TARGET: ${{ inputs.target }}
+          SOURCE_MASTER_SYNC_EXPECTED_FINGERPRINT: ${{ inputs.expected_fingerprint }}
+          SOURCE_MASTER_SYNC_APPROVAL: ${{ inputs.approval }}
+        run: node migration/source-master-sync.mjs | tee source-master-sync.log
+
+      - name: Upload plan / execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-master-sync-${{ github.run_id }}
+          path: |
+            source-master-sync.log
+            migration/source-master-sync-output/
+          if-no-files-found: warn
+          retention-days: 30

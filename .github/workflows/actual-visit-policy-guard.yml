@@ -1,0 +1,45 @@
+name: Actual Visit Date Policy Guard
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/actual-visit-date-audit.mjs'
+      - 'migration/build-source-identity-layer.mjs'
+      - 'migration/test-actual-visit-policy-consistency.mjs'
+      - '.github/workflows/actual-visit-policy-guard.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migration/actual-visit-date-audit.mjs'
+      - 'migration/build-source-identity-layer.mjs'
+      - 'migration/test-actual-visit-policy-consistency.mjs'
+      - '.github/workflows/actual-visit-policy-guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check policy consumers
+        run: |
+          node --check migration/actual-visit-date-audit.mjs
+          node --check migration/build-source-identity-layer.mjs
+          node --check migration/test-actual-visit-policy-consistency.mjs
+
+      - name: Verify locked Actual Visit Date policy remains consistent
+        run: node migration/test-actual-visit-policy-consistency.mjs
+
+      - name: Prove guard has no external write path
+        run: |
+          set -euo pipefail
+          if grep -nE "https?://|googleapis|method:[[:space:]]*['\"](POST|PUT|PATCH|DELETE)|values\.(update|append)|batchUpdate|Drive|workers\.dev|script\.google" migration/test-actual-visit-policy-consistency.mjs; then
+            echo "ERROR: policy regression guard must remain local/read-only."
+            exit 1
+          fi

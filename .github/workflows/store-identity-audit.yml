@@ -1,0 +1,88 @@
+name: SMF Store Identity Compatibility Audit
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/store-identity-audit.mjs'
+      - 'migration/safe-sync-engine.mjs'
+      - '.github/workflows/store-identity-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check read-only migration tools
+        run: |
+          node --check migration/store-identity-audit.mjs
+          node --check migration/safe-sync-engine.mjs
+
+      - name: Run read-only Store ID compatibility audit
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/store-identity-audit.mjs
+
+      - name: Run Safe Sync engine in DRY_RUN mode only
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+          SAFE_SYNC_MODE: DRY_RUN
+        run: node migration/safe-sync-engine.mjs
+
+      - name: Verify read-only audit tools contain no write or destructive path
+        run: |
+          set -euo pipefail
+          grep -q "writeImplementationEnabled: false" migration/safe-sync-engine.mjs
+          grep -q "APPLY BLOCKED BY DESIGN" migration/safe-sync-engine.mjs
+          if grep -niE "spreadsheets\.values\.(update|append)|batchUpdate|files\.delete|setTrashed\(true\)" \
+            migration/store-identity-audit.mjs migration/safe-sync-engine.mjs; then
+            echo "ERROR: write/destructive operation detected in read-only migration tools."
+            exit 1
+          fi
+
+      - name: Verify dedicated source identity builder stays isolated from protected live tables
+        run: |
+          set -euo pipefail
+          node --check migration/build-source-identity-layer.mjs
+          grep -q "TARGET_SHEET = 'STORE IDENTITY & SCHEDULE'" migration/build-source-identity-layer.mjs
+          grep -q "EXPECTED_STORE_COUNT = 83" migration/build-source-identity-layer.mjs
+          if grep -nE "V4_STORES.*(values.update|append)|V4_POE.*(values.update|append)|V4_PHOTOS.*(values.update|append)|files\.delete|setTrashed\(true\)" migration/build-source-identity-layer.mjs; then
+            echo "ERROR: protected production write/destructive operation detected in source identity builder."
+            exit 1
+          fi
+
+      - name: Enforce manual-only source-write workflows
+        run: |
+          set -euo pipefail
+          for f in .github/workflows/build-source-identity-layer.yml .github/workflows/store-change-history.yml; do
+            grep -q 'workflow_dispatch:' "$f"
+            if grep -qE '^[[:space:]]+push:' "$f"; then
+              echo "ERROR: write-capable migration workflow must remain manual-only: $f"
+              exit 1
+            fi
+          done
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-identity-audit
+          path: |
+            migration/audit-output/
+            migration/safe-sync-output/
+          if-no-files-found: error
+          retention-days: 14

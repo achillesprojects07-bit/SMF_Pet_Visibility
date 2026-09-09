@@ -1,0 +1,78 @@
+name: Controlled Store Apply Simulator
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/store-apply-simulator.mjs'
+      - 'migration/store-change-planner.mjs'
+      - '.github/workflows/store-apply-simulator.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migration/store-apply-simulator.mjs'
+      - 'migration/store-change-planner.mjs'
+      - '.github/workflows/store-apply-simulator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax checks
+        run: |
+          node --check migration/store-change-planner.mjs
+          node --check migration/store-apply-simulator.mjs
+
+      - name: Run isolated simulator tests
+        run: node migration/store-apply-simulator.mjs --self-test
+
+      - name: Run live read-only apply simulation
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/store-apply-simulator.mjs
+
+      - name: Prove simulator cannot mutate production or upload path
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "const MODE = 'SIMULATE_ONLY'" migration/store-apply-simulator.mjs
+          grep -q "writeImplementationEnabled = false" migration/store-apply-simulator.mjs
+          grep -q "uploadArchitectureTouched:false" migration/store-apply-simulator.mjs
+          grep -q "NEW_STORE_COMPATIBILITY_CREATION_NOT_YET_PROVEN" migration/store-apply-simulator.mjs
+          if grep -nE "method:'PUT'|method: 'PUT'|method:'PATCH'|method: 'PATCH'|method:'DELETE'|method: 'DELETE'|values.*append|batchUpdate|files\.delete|setTrashed\(true\)|googleapis\.com/drive|drive\.google|workers\.dev|script\.google" migration/store-apply-simulator.mjs; then
+            echo "ERROR: write/destructive/runtime path detected in apply simulator."
+            exit 1
+          fi
+
+      - name: Ensure frozen upload files were not changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          CHANGED=$(git diff --name-only origin/main HEAD)
+          printf '%s\n' "$CHANGED"
+          if printf '%s\n' "$CHANGED" | grep -E '^(app\.js|photo-v6/worker\.js|api-worker/worker\.js|backend/ApiV5\.gs)$'; then
+            echo "ERROR: frozen upload/runtime file changed in migration branch."
+            exit 1
+          fi
+          echo "Frozen upload/runtime files unchanged."
+
+      - name: Upload simulation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-apply-simulation
+          path: migration/store-apply-sim-output/
+          if-no-files-found: warn
+          retention-days: 14

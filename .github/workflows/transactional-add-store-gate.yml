@@ -1,0 +1,76 @@
+name: Transactional Add Store Gate
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/transactional-add-store-gate.mjs'
+      - '.github/workflows/transactional-add-store-gate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migration/transactional-add-store-gate.mjs'
+      - '.github/workflows/transactional-add-store-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/transactional-add-store-gate.mjs
+
+      - name: Run isolated gate tests
+        run: node migration/transactional-add-store-gate.mjs --self-test
+
+      - name: Run live read-only transaction gate
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+        run: node migration/transactional-add-store-gate.mjs
+
+      - name: Prove gate is read-only and activation-disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "const MODE='READ_ONLY_TRANSACTION_GATE'" migration/transactional-add-store-gate.mjs
+          grep -q "const writeImplementationEnabled=false" migration/transactional-add-store-gate.mjs
+          grep -q "const fieldActivationEnabled=false" migration/transactional-add-store-gate.mjs
+          if grep -nE "method:'PUT'|method: 'PUT'|method:'PATCH'|method: 'PATCH'|method:'DELETE'|method: 'DELETE'|values.*append|batchUpdate|files\.delete|setTrashed\(true\)|createFolder|files\?fields=id.*method:'POST'" migration/transactional-add-store-gate.mjs; then
+            echo 'ERROR: write/destructive path detected in transaction gate.'
+            exit 1
+          fi
+
+      - name: Ensure frozen upload/runtime files match main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          for f in app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs; do
+            MAIN_SHA=$(git rev-parse "origin/main:$f")
+            HEAD_SHA=$(git rev-parse "HEAD:$f")
+            if [ "$MAIN_SHA" != "$HEAD_SHA" ]; then
+              echo "ERROR: frozen upload/runtime file differs from main: $f"
+              exit 1
+            fi
+          done
+          echo 'Frozen upload/runtime files unchanged.'
+
+      - name: Upload readiness manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transactional-add-store-gate
+          path: migration/transaction-gate-output/
+          if-no-files-found: warn
+          retention-days: 14

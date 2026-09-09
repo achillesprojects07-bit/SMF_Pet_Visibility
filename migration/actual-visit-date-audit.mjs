@@ -1,0 +1,46 @@
+#!/usr/bin/env node
+
+/**
+ * Read-only Actual Visit Date operational audit.
+ *
+ * Locked business rule:
+ * - a final submitted field outcome COMPLETED, INCOMPLETE, REFUSED, or CLOSED counts as an Actual Visit
+ * - installation is NOT required for a visit
+ * - Actual Visit Date is the earliest Completed At date among qualifying final outcomes
+ * - an explicit field note saying the team did NOT visit overrides the final outcome for that submission
+ * - OPEN / blank / non-final records do not create an Actual Visit Date
+ *
+ * Safety contract: GET requests only; no writes or deletes anywhere.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+const SOURCE_SHEET_ID=process.env.SOURCE_SHEET_ID||'1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg';
+const INTERNAL_SHEET_ID=process.env.GOOGLE_SHEET_ID||'1TNrb3ir8vS6CyZ8kXhRH43JXoH4Ws7iQ4g3649KQTf0';
+const IDENTITY_SHEET='STORE IDENTITY & SCHEDULE';
+const EXPECTED_BASELINE_COUNT=83;
+const OUT_DIR='migration/actual-visit-audit-output';
+const FINAL_VISIT_STATUSES=new Set(['COMPLETED','INCOMPLETE','REFUSED','CLOSED']);
+function need(n){const v=String(process.env[n]||'').trim();if(!v)throw new Error(`Missing required environment variable: ${n}`);return v;}
+function text(v){return String(v??'').trim();} function upper(v){return text(v).toUpperCase();}
+function rowsToObjects(values){if(!values?.length)return[];const h=values[0].map(text);return values.slice(1).filter(r=>r.some(v=>text(v)!=='')).map((r,i)=>{const o={__row:i+2};h.forEach((k,j)=>{if(k)o[k]=r[j]??'';});return o;});}
+function unique(a){return new Set(a).size===a.length;}
+function dateOnly(v){const s=text(v);if(!s)return'';let m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);if(m)return`${m[3]}-${String(+m[1]).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[1]}-${m[2]}-${m[3]}`:'';}
+function dateRank(v){const d=dateOnly(v);return d?Date.parse(`${d}T00:00:00Z`):0;}
+function compact(v){return text(v).replace(/\s+/g,' ');}
+const NO_VISIT_PATTERNS=[/hindi\s+na\s+(?:din\s+)?(?:po\s+)?(?:namin\s+)?pinuntahan/i,/di\s+na\s+(?:din\s+)?(?:po\s+)?(?:namin\s+)?pinuntahan/i,/hindi\s+(?:na\s+)?(?:po\s+)?pinuntahan/i,/sinabe.*agent.*hindi.*pinuntahan/i,/sinabi.*agent.*hindi.*pinuntahan/i];
+function explicitNoVisit(note){return NO_VISIT_PATTERNS.some(re=>re.test(note));}
+async function accessToken(){const body=new URLSearchParams({client_id:need('GOOGLE_OAUTH_CLIENT_ID'),client_secret:need('GOOGLE_OAUTH_CLIENT_SECRET'),refresh_token:need('GOOGLE_OAUTH_REFRESH_TOKEN'),grant_type:'refresh_token'});const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});const j=await r.json();if(!r.ok||!j.access_token)throw new Error(`Google OAuth refresh failed: ${r.status}`);return j.access_token;}
+async function getRange(token,id,range){const u=`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`;const r=await fetch(u,{headers:{authorization:`Bearer ${token}`}});if(!r.ok)throw new Error(`GET ${range} failed: ${r.status} ${await r.text()}`);return(await r.json()).values||[];}
+const token=await accessToken();
+const [identityValues,poeValues]=await Promise.all([getRange(token,SOURCE_SHEET_ID,`'${IDENTITY_SHEET}'!A1:R500`),getRange(token,INTERNAL_SHEET_ID,'V4_POE!A1:S2500')]);
+const identity=rowsToObjects(identityValues),poe=rowsToObjects(poeValues).filter(r=>upper(r.Environment)==='LIVE');
+if(identity.length!==EXPECTED_BASELINE_COUNT)throw new Error(`Identity row count ${identity.length}; expected ${EXPECTED_BASELINE_COUNT}.`);
+const ids=identity.map(r=>text(r['Store ID'])),keys=identity.map(r=>text(r['Legacy Store Key']));if(ids.some(v=>!v)||!unique(ids))throw new Error('Identity Store IDs blank/duplicated.');if(keys.some(v=>!v)||!unique(keys))throw new Error('Identity Legacy Store Keys blank/duplicated.');
+const byKey=new Map(identity.map(r=>[text(r['Legacy Store Key']),r]));const unresolved=[...new Set(poe.map(r=>text(r['Store Key'])).filter(k=>k&&!byKey.has(k)))];if(unresolved.length)throw new Error(`LIVE V4_POE contains unresolved Store Keys: ${unresolved.join(', ')}`);
+function classify(r){const completedAt=text(r['Completed At']),status=upper(r['Store Status']),note=compact(r.Notes),noVisit=explicitNoVisit(note);if(!completedAt)return{classification:'NON_FINAL',qualifies:false,status,completedAt:'',visitDate:'',note,reason:'Completed At blank'};if(!FINAL_VISIT_STATUSES.has(status))return{classification:'NON_VISIT_STATUS',qualifies:false,status,completedAt,visitDate:'',note,reason:`Status ${status||'(blank)'} is not a final visit outcome`};if(noVisit)return{classification:'EXPLICIT_NO_VISIT_EXCEPTION',qualifies:false,status,completedAt,visitDate:'',note,reason:'Final outcome overridden by explicit note that team did not visit'};return{classification:'ACTUAL_VISIT',qualifies:true,status,completedAt,visitDate:dateOnly(completedAt),note,reason:`${status} final field outcome counts as actual visit regardless of installation`};}
+const poeByKey=new Map();for(const r of poe){const k=text(r['Store Key']);if(!k)continue;if(!poeByKey.has(k))poeByKey.set(k,[]);poeByKey.get(k).push(r);}
+const details=[];for(const row of identity){const key=text(row['Legacy Store Key']);const submissions=(poeByKey.get(key)||[]).map(classify);const visits=submissions.filter(s=>s.qualifies&&s.visitDate).sort((a,b)=>dateRank(a.visitDate)-dateRank(b.visitDate));const proposed=visits[0]?.visitDate||'';const current=dateOnly(row['Actual Visit Date']);let evidenceClass='NO_FIELD_SUBMISSION';if(visits.length)evidenceClass='ACTUAL_VISIT';else if(submissions.some(s=>s.classification==='EXPLICIT_NO_VISIT_EXCEPTION'))evidenceClass='EXPLICIT_NO_VISIT_EXCEPTION';else if(submissions.length)evidenceClass='NO_QUALIFYING_FINAL_VISIT';details.push({storeId:text(row['Store ID']),storeName:text(row['Current Store Name']),legacyStoreKey:key,currentActualVisitDate:current,proposedActualVisitDate:proposed,evidenceClass,changeNeeded:current!==proposed,submissions});}
+const statusCounts={};for(const r of poe){const s=upper(r['Store Status'])||'(BLANK)';statusCounts[s]=(statusCounts[s]||0)+1;}const evidenceCounts={};for(const d of details)evidenceCounts[d.evidenceClass]=(evidenceCounts[d.evidenceClass]||0)+1;
+const changed=details.filter(d=>d.changeNeeded),exceptions=details.filter(d=>d.evidenceClass==='EXPLICIT_NO_VISIT_EXCEPTION');
+const summary={ok:true,policy:'FINAL_FIELD_OUTCOME_COUNTS_AS_ACTUAL_VISIT',rule:['COMPLETED, INCOMPLETE, REFUSED and CLOSED with Completed At count as Actual Visits.','Installation is not required.','Use earliest qualifying Completed At date.','Explicit note that the team did not visit overrides that submission and leaves it non-qualifying.','OPEN, blank or other non-final statuses do not create Actual Visit Date.'],identityRows:identity.length,livePoeRows:poe.length,statusCounts,evidenceCounts,currentActualVisitDatesPopulated:details.filter(d=>d.currentActualVisitDate).length,proposedActualVisitDatesPopulated:details.filter(d=>d.proposedActualVisitDate).length,rowsWhoseCurrentActualVisitDateWouldChange:changed.length,explicitNoVisitExceptions:exceptions.map(d=>({storeId:d.storeId,storeName:d.storeName,current:d.currentActualVisitDate,proposed:d.proposedActualVisitDate,notes:d.submissions.filter(s=>s.classification==='EXPLICIT_NO_VISIT_EXCEPTION').map(s=>s.note)})),proposedChanges:changed.map(d=>({storeId:d.storeId,storeName:d.storeName,current:d.currentActualVisitDate,proposed:d.proposedActualVisitDate,evidenceClass:d.evidenceClass})),invariants:{storeIdsUnique:unique(ids),legacyStoreKeysUnique:unique(keys),allLivePoeKeysResolve:unresolved.length===0,writesEnabled:false,deletes:0},touchedSourceWorkbook:false,touchedV4Stores:false,touchedV4Poe:false,touchedV4Photos:false,touchedDrive:false,touchedPhotoWorker:false,deletes:0};
+fs.mkdirSync(OUT_DIR,{recursive:true});fs.writeFileSync(path.join(OUT_DIR,'actual-visit-date-audit.json'),JSON.stringify({summary,details},null,2));let md=`# SMF Actual Visit Date Audit\n\n**Mode:** READ ONLY  \n**Policy:** ${summary.policy}\n\n- Identity rows: ${summary.identityRows}\n- LIVE V4_POE rows: ${summary.livePoeRows}\n- Current dates populated: ${summary.currentActualVisitDatesPopulated}\n- Proposed dates populated: ${summary.proposedActualVisitDatesPopulated}\n- Rows that would change: ${changed.length}\n- DELETE: 0\n\n## Rule\n`;for(const r of summary.rule)md+=`- ${r}\n`;md+='\n## Explicit no-visit exceptions\n';for(const d of exceptions)md+=`- ${d.storeId} — ${d.storeName}: ${d.currentActualVisitDate||'(blank)'} → ${d.proposedActualVisitDate||'(blank)'}\n`;md+='\n## Proposed changes\n';for(const d of changed)md+=`- ${d.storeId} — ${d.storeName}: ${d.currentActualVisitDate||'(blank)'} → ${d.proposedActualVisitDate||'(blank)'} [${d.evidenceClass}]\n`;fs.writeFileSync(path.join(OUT_DIR,'actual-visit-date-audit.md'),md);console.log(JSON.stringify(summary,null,2));

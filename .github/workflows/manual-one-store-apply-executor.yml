@@ -1,0 +1,80 @@
+name: Manual One Store Apply Executor Guard
+
+on:
+  push:
+    branches: [store-id-compat-audit]
+    paths:
+      - 'migration/manual-one-store-apply-executor.mjs'
+      - '.github/workflows/manual-one-store-apply-executor.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migration/manual-one-store-apply-executor.mjs'
+      - '.github/workflows/manual-one-store-apply-executor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  executor-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: node --check migration/manual-one-store-apply-executor.mjs
+
+      - name: Run isolated executor safety tests
+        run: node migration/manual-one-store-apply-executor.mjs --self-test
+
+      - name: Generate hard-lock report
+        run: node migration/manual-one-store-apply-executor.mjs
+
+      - name: Prove production apply and field containment stay locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "const PRODUCTION_APPLY_UNLOCKED=false" migration/manual-one-store-apply-executor.mjs
+          grep -q "const FIELD_VISIBILITY_CONTAINMENT_PROVEN=false" migration/manual-one-store-apply-executor.mjs
+          grep -q "PRODUCTION APPLY IS HARD-LOCKED IN CODE" migration/manual-one-store-apply-executor.mjs
+          grep -q "Executor activation sequence intentionally unavailable in this build" migration/manual-one-store-apply-executor.mjs
+          if node migration/manual-one-store-apply-executor.mjs --apply >/tmp/apply.out 2>/tmp/apply.err; then
+            echo "ERROR: hard-locked executor unexpectedly allowed --apply."
+            exit 1
+          fi
+          grep -q "HARD-LOCKED" /tmp/apply.err
+
+      - name: Prove protected production targets are not write destinations
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nE "V4_POE.*(putRange|appendRange)|V4_PHOTOS.*(putRange|appendRange)|files:delete|files\.delete|setTrashed|method:'DELETE'|method: 'DELETE'" migration/manual-one-store-apply-executor.mjs; then
+            echo "ERROR: protected/destructive write path detected."
+            exit 1
+          fi
+
+      - name: Ensure frozen upload/runtime files match main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          for f in app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs; do
+            BASE=$(git rev-parse "origin/main:$f")
+            HEADSHA=$(git rev-parse "HEAD:$f")
+            if [ "$BASE" != "$HEADSHA" ]; then
+              echo "ERROR: frozen upload/runtime file differs from main: $f"
+              exit 1
+            fi
+          done
+          echo "Frozen upload/runtime files unchanged."
+
+      - name: Upload executor safety report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-one-store-apply-executor-guard
+          path: migration/store-apply-executor-output/
+          if-no-files-found: warn
+          retention-days: 14

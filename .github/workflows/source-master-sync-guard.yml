@@ -1,0 +1,51 @@
+name: Source Master Sync Guard
+
+on:
+  pull_request:
+    paths:
+      - 'migration/source-master-sync.mjs'
+      - '.github/workflows/source-master-sync.yml'
+      - '.github/workflows/source-master-sync-guard.yml'
+  push:
+    branches:
+      - store-id-compat-audit
+    paths:
+      - 'migration/source-master-sync.mjs'
+      - '.github/workflows/source-master-sync.yml'
+      - '.github/workflows/source-master-sync-guard.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check
+        run: node --check migration/source-master-sync.mjs
+      - name: Self-test
+        run: node migration/source-master-sync.mjs --self-test
+      - name: Assert protected production boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Source Master Sync may read any sheet, but must never contain a write call targeting V4_POE or V4_PHOTOS.
+          if grep -E "(putRange|appendRange)\([^\n]*(V4_POE|V4_PHOTOS)" migration/source-master-sync.mjs; then
+            echo 'Forbidden V4_POE/V4_PHOTOS write path detected.'
+            exit 1
+          fi
+          # No destructive Drive API methods are allowed.
+          if grep -E "method:[[:space:]]*'(DELETE|PATCH)'" migration/source-master-sync.mjs; then
+            echo 'Forbidden destructive Drive method detected.'
+            exit 1
+          fi
+          # Deletion semantics must remain absent.
+          if grep -E "delete(Row|Range|Store|File|Folder)|batchClear" migration/source-master-sync.mjs; then
+            echo 'Forbidden delete/clear primitive detected.'
+            exit 1
+          fi
+          echo 'Protected boundaries intact.'

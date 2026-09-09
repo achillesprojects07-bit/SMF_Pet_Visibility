@@ -1,0 +1,78 @@
+name: Production One Store Dry Run
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: |
+          node --check migration/production-one-store-dry-run.mjs
+          node --check migration/production-one-store-dry-run-audit.mjs
+
+      - name: Run isolated dry-run tests
+        run: node migration/production-one-store-dry-run.mjs --self-test
+
+      - name: Run production-data one-store dry run
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SOURCE_SHEET_ID: 1_qtlUdaytLA_zR03rqBh8RYP-MWjYKVaRoABZvYFBlg
+          POE_ROOT_FOLDER_ID: ${{ secrets.POE_ROOT_FOLDER_ID }}
+        run: node migration/production-one-store-dry-run.mjs
+
+      - name: Run semantic safety audit
+        run: node migration/production-one-store-dry-run-audit.mjs
+
+      - name: Prove dry run cannot write production
+        run: |
+          ! grep -Eq "values:append|batchUpdate|method:'PUT'|method:\"PUT\"|method:'PATCH'|method:\"PATCH\"|method:'DELETE'|method:\"DELETE\"" migration/production-one-store-dry-run.mjs
+          grep -q "const PRODUCTION_WRITE_ENABLED=false" migration/production-one-store-dry-run.mjs
+          grep -q "const FIELD_ACTIVATION_ENABLED=false" migration/production-one-store-dry-run.mjs
+          grep -q "realStoreApplied:false" migration/production-one-store-dry-run.mjs
+          ! grep -Eq "fetch\(|https://|values:append|batchUpdate" migration/production-one-store-dry-run-audit.mjs
+
+      - name: Ensure one-store and protected-data assertions exist
+        run: |
+          grep -q "exactlyOneStoreScope" migration/production-one-store-dry-run.mjs
+          grep -q "v4PoeUnchanged" migration/production-one-store-dry-run.mjs
+          grep -q "v4PhotosUnchanged" migration/production-one-store-dry-run.mjs
+          grep -q "noDriveWrites" migration/production-one-store-dry-run.mjs
+          grep -q "noDeletes" migration/production-one-store-dry-run.mjs
+          grep -q "noDeleteRequired" migration/production-one-store-dry-run-audit.mjs
+          grep -q "noUploadRuntimeChangeRequired" migration/production-one-store-dry-run-audit.mjs
+          grep -q "driveRootChecked" migration/production-one-store-dry-run-audit.mjs
+          grep -q "driveAreaParentExists" migration/production-one-store-dry-run-audit.mjs
+
+      - name: Ensure executor remains hard locked
+        run: |
+          grep -q "const PRODUCTION_APPLY_UNLOCKED=false" migration/manual-one-store-apply-executor.mjs
+          grep -q "const FIELD_VISIBILITY_CONTAINMENT_PROVEN=false" migration/manual-one-store-apply-executor.mjs
+
+      - name: Ensure frozen upload/runtime files match main
+        run: |
+          git fetch origin main --depth=1
+          for f in app.js photo-v6/worker.js api-worker/worker.js backend/ApiV5.gs; do
+            git diff --quiet origin/main -- "$f" || { echo "Frozen file changed: $f"; exit 1; }
+          done
+          echo "Frozen upload/runtime files unchanged."
+
+      - name: Upload dry-run reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-one-store-dry-run
+          path: |
+            migration/production-one-store-dry-run-output/production-one-store-dry-run.json
+            migration/production-one-store-dry-run-output/production-one-store-dry-run-audit.json
