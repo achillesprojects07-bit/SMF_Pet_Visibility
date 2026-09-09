@@ -1,58 +1,47 @@
 (() => {
   'use strict';
 
-  // Passive Admin store-detail shell only.
+  // Passive Admin store-detail section controller only.
   // Does not fetch data, mutate store content, observe renders, or write any data.
   // admin.js remains the sole owner of the store-detail DOM and API lifecycle.
 
   let savedScrollY=0;
   let backButton=null;
-  let backdrop=null;
 
   function detail(){return document.getElementById('adminStoreDetail')}
-
-  function ensureBackdrop(){
-    if(backdrop&&document.body.contains(backdrop))return backdrop;
-    backdrop=document.createElement('div');
-    backdrop.className='adminDetailBackdrop';
-    backdrop.setAttribute('aria-hidden','true');
-    document.body.appendChild(backdrop);
-    return backdrop;
-  }
+  function storeSection(){return detail()?.closest('section.card')||null}
 
   function ensureBackButton(){
-    if(backButton&&document.body.contains(backButton))return backButton;
+    const section=storeSection();
+    if(!section)return null;
+    if(backButton&&section.contains(backButton))return backButton;
     backButton=document.createElement('button');
     backButton.type='button';
-    backButton.className='secondary adminFloatingBack';
+    backButton.className='secondary adminInlineBack';
     backButton.textContent='← Back to store list';
     backButton.setAttribute('aria-label','Back to current filtered store list');
     backButton.addEventListener('click',closeDetail);
-    document.body.appendChild(backButton);
+    section.insertBefore(backButton,detail());
     return backButton;
   }
 
-  function openDetailShell(){
-    const d=detail();
-    if(!d)return;
+  function openDetailSection(){
+    const d=detail(),section=storeSection();
+    if(!d||!section)return;
     savedScrollY=window.scrollY;
-    ensureBackdrop().classList.add('isVisible');
-    d.classList.add('adminStoreDetailFocused');
-    d.scrollTop=0;
-    document.documentElement.classList.add('adminDetailOpen');
-    document.body.classList.add('adminDetailOpen');
-    ensureBackButton().classList.add('isVisible');
+    section.classList.add('adminStoreDetailMode');
+    d.classList.add('adminStoreDetailInline');
+    ensureBackButton()?.classList.add('isVisible');
+    requestAnimationFrame(()=>section.scrollIntoView({behavior:'auto',block:'start'}));
   }
 
   function closeDetail(){
-    const d=detail();
+    const d=detail(),section=storeSection();
     if(d){
-      d.classList.remove('adminStoreDetailFocused');
+      d.classList.remove('adminStoreDetailInline');
       d.innerHTML='';
     }
-    document.documentElement.classList.remove('adminDetailOpen');
-    document.body.classList.remove('adminDetailOpen');
-    if(backdrop)backdrop.classList.remove('isVisible');
+    section?.classList.remove('adminStoreDetailMode');
     if(backButton)backButton.classList.remove('isVisible');
     requestAnimationFrame(()=>window.scrollTo({top:savedScrollY,behavior:'auto'}));
   }
@@ -60,10 +49,10 @@
   document.addEventListener('click',e=>{
     const target=e.target.closest?.('#storeTableWrap .adminOpenStore, #storeTableWrap .adminStoreRow');
     if(!target)return;
-    openDetailShell();
+    openDetailSection();
   },true);
 
   document.addEventListener('keydown',e=>{
-    if(e.key==='Escape'&&detail()?.classList.contains('adminStoreDetailFocused'))closeDetail();
+    if(e.key==='Escape'&&storeSection()?.classList.contains('adminStoreDetailMode'))closeDetail();
   });
 })();
