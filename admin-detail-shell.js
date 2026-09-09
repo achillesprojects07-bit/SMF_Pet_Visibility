@@ -7,8 +7,18 @@
 
   let savedScrollY=0;
   let backButton=null;
+  let backdrop=null;
 
   function detail(){return document.getElementById('adminStoreDetail')}
+
+  function ensureBackdrop(){
+    if(backdrop&&document.body.contains(backdrop))return backdrop;
+    backdrop=document.createElement('div');
+    backdrop.className='adminDetailBackdrop';
+    backdrop.setAttribute('aria-hidden','true');
+    document.body.appendChild(backdrop);
+    return backdrop;
+  }
 
   function ensureBackButton(){
     if(backButton&&document.body.contains(backButton))return backButton;
@@ -26,6 +36,7 @@
     const d=detail();
     if(!d)return;
     savedScrollY=window.scrollY;
+    ensureBackdrop().classList.add('isVisible');
     d.classList.add('adminStoreDetailFocused');
     d.scrollTop=0;
     document.documentElement.classList.add('adminDetailOpen');
@@ -41,6 +52,7 @@
     }
     document.documentElement.classList.remove('adminDetailOpen');
     document.body.classList.remove('adminDetailOpen');
+    if(backdrop)backdrop.classList.remove('isVisible');
     if(backButton)backButton.classList.remove('isVisible');
     requestAnimationFrame(()=>window.scrollTo({top:savedScrollY,behavior:'auto'}));
   }
