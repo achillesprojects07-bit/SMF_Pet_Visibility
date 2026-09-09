@@ -9,7 +9,14 @@
   function cls(s){s=String(s||'OPEN').toUpperCase();return s==='COMPLETED'?'completed':s==='INCOMPLETE'?'incomplete':s==='REFUSED'?'refused':s==='CLOSED'?'closed':'open'}
   function toast(msg,type='info'){const t=$('adminToast');t.textContent=msg;t.dataset.type=type;t.classList.remove('hidden');clearTimeout(window.__adminToast);window.__adminToast=setTimeout(()=>t.classList.add('hidden'),3500)}
   function requireApi(){if(!API)throw new Error('Admin API is not configured.')}
-  async function api(action,args=[]){requireApi();let r;try{r=await fetch(API+'/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,args}),cache:'no-store',credentials:'omit'})}catch(_){throw new Error('Network connection failed. Check signal and retry.')}let d={};try{d=await r.json()}catch(_){throw new Error('Server returned an unreadable response.')}if(!r.ok||d.ok===false)throw new Error(d.error||('Server error '+r.status));return Object.prototype.hasOwnProperty.call(d,'result')?d.result:d}
+  async function api(action,args=[]){
+    requireApi();
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),35000);let r;
+    try{r=await fetch(API+'/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,args}),cache:'no-store',credentials:'omit',signal:controller.signal})}
+    catch(err){if(err?.name==='AbortError')throw new Error('Admin request timed out. Please retry.');throw new Error('Network connection failed. Check signal and retry.')}
+    finally{clearTimeout(timer)}
+    let d={};try{d=await r.json()}catch(_){throw new Error('Server returned an unreadable response.')}if(!r.ok||d.ok===false)throw new Error(d.error||('Server error '+r.status));return Object.prototype.hasOwnProperty.call(d,'result')?d.result:d
+  }
   function loading(tab,text='Loading…'){$('tab_'+tab).innerHTML=`<section class="card loading">${esc(text)}</section>`}
   function panelError(tab,err){$('tab_'+tab).innerHTML=`<section class="card"><h2>Could not load this section</h2><p class="error">${esc(err.message||err)}</p><button class="secondary retryTab">Retry</button></section>`;const b=$('tab_'+tab).querySelector('.retryTab');if(b)b.onclick=()=>loadTab(tab,true)}
 
@@ -19,15 +26,20 @@
     state.code=code;state.user=r.user;sessionStorage.setItem('smf_admin_code',code);
     $('adminLogout').classList.remove('hidden');$('adminLogin').classList.add('hidden');$('adminApp').classList.remove('hidden');
     $('adminHello').textContent='Hello, '+(r.user.name||'Admin');$('adminMeta').textContent='ADMIN • '+r.mode+' • Backend '+r.version;
-    selectTab('overview',true);
+    await selectTab('overview',true);
   }
 
   $('adminLoginForm').onsubmit=async e=>{e.preventDefault();$('adminLoginError').textContent='';$('adminLoginBtn').disabled=true;$('adminLoginBtn').textContent='Signing in…';try{await login($('adminCode').value.trim())}catch(err){$('adminLoginError').textContent=err.message}finally{$('adminLoginBtn').disabled=false;$('adminLoginBtn').textContent='Sign in'}};
   $('adminLogout').onclick=()=>{sessionStorage.removeItem('smf_admin_code');state.code='';state.user=null;$('adminLogout').classList.add('hidden');$('adminApp').classList.add('hidden');$('adminLogin').classList.remove('hidden')};
-  $('adminRefresh').onclick=()=>loadTab(state.tab,true);
+  $('adminRefresh').onclick=async()=>{
+    const btn=$('adminRefresh');
+    if(state.loading.has(state.tab))return;
+    const old=btn.textContent;btn.textContent='Refreshing…';
+    try{await loadTab(state.tab,true)}finally{btn.textContent=old}
+  };
 
   document.querySelectorAll('.adminTab').forEach(b=>b.onclick=()=>selectTab(b.dataset.tab));
-  function selectTab(tab,force=false){state.tab=tab;document.querySelectorAll('.adminTab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.adminPanel').forEach(p=>p.classList.add('hidden'));$('tab_'+tab).classList.remove('hidden');loadTab(tab,force)}
+  function selectTab(tab,force=false){state.tab=tab;document.querySelectorAll('.adminTab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.adminPanel').forEach(p=>p.classList.add('hidden'));$('tab_'+tab).classList.remove('hidden');return loadTab(tab,force)}
   async function loadTab(tab,force=false){
     if(state.loading.has(tab))return;
     state.loading.add(tab);$('adminRefresh').disabled=true;
@@ -78,15 +90,28 @@
   }
   async function openAdminStore(key){
     const detail=$('adminStoreDetail');
+    if(!detail)throw new Error('Store detail view is not ready.');
     detail.innerHTML='<section class="card loading">Loading store…</section>';
     detail.scrollIntoView({behavior:'smooth',block:'start'});
-    try{const r=await api('getAdminStoreV4',[state.code,key]),s=r.store,p=r.poe||{},groups=r.photoGroups||{};const pics=Object.keys(groups).flatMap(k=>(groups[k]||[]).map(x=>({base:k,...x})));detail.innerHTML=`<section class="card"><div class="sectionTitle"><div><h2>${esc(s.name)}</h2><div class="small">${esc(s.storeId||'')} • ${esc(s.team)} • ${esc(s.area)} • ${esc(s.category)}</div></div><span class="badge ${cls(p.outcome)}">${esc(label(p.outcome))}</span></div><div class="storeDetail"><div><h3>Visit</h3><div class="systemLine"><span>Finalized by</span><b>${esc(p.completedBy||'—')}</b></div><div class="systemLine"><span>Finalized at</span><b>${esc(p.completedAt||'—')}</b></div><div class="systemLine"><span>Updated</span><b>${esc(p.updatedAt||'—')}</b></div><h3>Notes</h3><p>${esc(p.notes||'—')}</p></div><div><h3>Inventory</h3>${inventoryReadout(s.materials||{},p)}</div></div>${pics.length?`<h3>POE Photos (${pics.length})</h3><div class="photoThumbs">${pics.map(x=>`<a class="photoThumb" href="${esc(x.url||'#')}" target="_blank" rel="noopener"><img src="${esc(x.previewUrl||x.url||'')}" alt="${esc(x.base)}"><b>${esc(x.base)}</b><div class="small">${esc(x.uploadedAt||'')}</div></a>`).join('')}</div>`:'<div class="emptyState">No active POE photos.</div>'}${p.finalized?`<div class="adminActions" style="margin-top:14px"><button id="reopenStore" class="warn">Reopen for Correction</button></div>`:''}</section>`;if($('reopenStore'))$('reopenStore').onclick=()=>reopenStore(key,s.name)}catch(err){detail.innerHTML=`<section class="card error">${esc(err.message)}</section>`}
+    try{const r=await api('getAdminStoreV4',[state.code,key]),s=r.store,p=r.poe||{},groups=r.photoGroups||{};const pics=Object.keys(groups).flatMap(k=>(groups[k]||[]).map(x=>({base:k,...x})));detail.innerHTML=`<section class="card"><div class="sectionTitle"><div><h2>${esc(s.name)}</h2><div class="small">${esc(s.storeId||'')} • ${esc(s.team)} • ${esc(s.area)} • ${esc(s.category)}</div></div><span class="badge ${cls(p.outcome)}">${esc(label(p.outcome))}</span></div><div class="storeDetail"><div><h3>Visit</h3><div class="systemLine"><span>Finalized by</span><b>${esc(p.completedBy||'—')}</b></div><div class="systemLine"><span>Finalized at</span><b>${esc(p.completedAt||'—')}</b></div><div class="systemLine"><span>Updated</span><b>${esc(p.updatedAt||'—')}</b></div><h3>Notes</h3><p>${esc(p.notes||'—')}</p></div><div><h3>Inventory</h3>${inventoryReadout(s.materials||{},p)}</div></div>${pics.length?`<h3>POE Photos (${pics.length})</h3><div class="photoThumbs">${pics.map(x=>`<a class="photoThumb" href="${esc(x.url||'#')}" target="_blank" rel="noopener"><img src="${esc(x.previewUrl||x.url||'')}" alt="${esc(x.base)}"><b>${esc(x.base)}</b><div class="small">${esc(x.uploadedAt||'')}</div></a>`).join('')}</div>`:'<div class="emptyState">No active POE photos.</div>'}${p.finalized?`<div class="adminActions" style="margin-top:14px"><button id="reopenStore" class="warn">Reopen for Correction</button></div>`:''}</section>`;if($('reopenStore'))$('reopenStore').onclick=()=>reopenStore(key,s.name)}catch(err){detail.innerHTML=`<section class="card error">${esc(err.message)}</section>`;throw err}
   }
   function inventoryReadout(mats,p){const keys=Object.keys(mats).filter(k=>Number(mats[k]||0)>0);return keys.length?`<table class="adminTable"><thead><tr><th>Item</th><th>Beg</th><th>Installed</th><th>Remaining</th></tr></thead><tbody>${keys.map(k=>`<tr><td>${esc(k)}</td><td>${Number(p.beginning?.[k]??mats[k]??0)}</td><td>${Number(p.installed?.[k]??0)}</td><td>${Number(p.takeHome?.[k]??((p.beginning?.[k]??mats[k]??0)-(p.installed?.[k]??0)))}</td></tr>`).join('')}</tbody></table>`:'<div class="small">No material allocation.</div>'}
   async function reopenStore(key,name){const reason=prompt('Reason for reopening '+name+' for correction:');if(!reason)return;try{await api('reopenStoreVisitV4',[state.code,key,reason]);toast('Store reopened. Day submission cleared if required.','success');state.dashboard=null;await loadStores(true);await openAdminStore(key)}catch(err){toast(err.message,'error')}}
 
   async function loadIssues(force){if(force||!state.issues){loading('issues','Checking current issues…');state.issues=await api('getAdminIssuesV4',[state.code])}renderIssues()}
-  function renderIssues(){const rows=state.issues?.issues||[];$('tab_issues').innerHTML=`<section class="card"><div class="sectionTitle"><h2>Issues</h2><b>${rows.length}</b></div><p class="small">Stores needing attention because of missing POE, inventory validation or guide review. Nothing is changed automatically.</p></section>${rows.length?rows.map(x=>`<section class="card issueCard ${String(x.priority||'').toLowerCase()}"><div class="sectionTitle"><h2>${esc(x.name)}</h2><span class="tag">${esc(x.priority)} • ${esc(x.type)}</span></div><p>${esc(x.detail)}</p><div class="issueMeta"><span class="tag">${esc(x.team)}</span><span class="tag">${esc(x.area)}</span></div><div class="adminActions" style="margin-top:10px"><button class="secondary issueOpen" data-key="${esc(x.key)}">Inspect Store</button></div></section>`).join(''):'<section class="card emptyState">No current issues.</section>'}`;document.querySelectorAll('.issueOpen').forEach(b=>b.onclick=async()=>{selectTab('stores');await openAdminStore(b.dataset.key)})}
+  function renderIssues(){
+    const rows=state.issues?.issues||[];
+    $('tab_issues').innerHTML=`<section class="card"><div class="sectionTitle"><h2>Issues</h2><b>${rows.length}</b></div><p class="small">Stores needing attention because of missing POE, inventory validation or guide review. Nothing is changed automatically.</p></section>${rows.length?rows.map(x=>`<section class="card issueCard ${String(x.priority||'').toLowerCase()}"><div class="sectionTitle"><h2>${esc(x.name)}</h2><span class="tag">${esc(x.priority)} • ${esc(x.type)}</span></div><p>${esc(x.detail)}</p><div class="issueMeta"><span class="tag">${esc(x.team)}</span><span class="tag">${esc(x.area)}</span></div><div class="adminActions" style="margin-top:10px"><button class="secondary issueOpen" data-key="${esc(x.key)}">Inspect Store</button></div></section>`).join(''):'<section class="card emptyState">No current issues.</section>'}`;
+    document.querySelectorAll('.issueOpen').forEach(b=>b.onclick=async()=>{
+      const key=b.dataset.key;
+      try{
+        b.disabled=true;b.textContent='Opening…';
+        await selectTab('stores');
+        if(!$('adminStoreDetail'))throw new Error('Stores view did not finish loading.');
+        await openAdminStore(key);
+      }catch(err){toast(err.message||String(err),'error')}
+    })
+  }
 
   async function loadUsers(force){if(force||!state.users){loading('users','Loading users…');state.users=await api('getUsersV4',[state.code])}renderUsers()}
   function renderUsers(){const rows=state.users||[];$('tab_users').innerHTML=`<section class="card"><div class="sectionTitle"><h2>Users</h2><button id="newFieldUser">+ Field User</button></div><p class="small">Manage access for Admin, Field and Client users. In LIVE, disable users instead of deleting them.</p><div class="adminTableCard"><table class="adminTable"><thead><tr><th>Name</th><th>Role</th><th>Team</th><th>Access Code</th><th>Active</th><th>Last Used</th><th>Actions</th></tr></thead><tbody>${rows.map(u=>`<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.role)}</td><td>${esc(u.team||'—')}</td><td class="userCode">${esc(u.code)}</td><td>${u.active?'✓ Active':'Disabled'}</td><td>${esc(u.last||'—')}</td><td>${u.role==='ADMIN'?'—':`<div class="adminActions"><button class="secondary userToggle" data-row="${u.row}" data-active="${u.active?'1':'0'}">${u.active?'Disable':'Enable'}</button>${u.role==='FIELD'?`<button class="secondary userTeam" data-row="${u.row}" data-team="${esc(u.team)}">Move Team</button><button class="secondary userReset" data-row="${u.row}">Reset Code</button>`:''}</div>`}</td></tr>`).join('')}</tbody></table></div></section>`;$('newFieldUser').onclick=createFieldUser;document.querySelectorAll('.userToggle').forEach(b=>b.onclick=()=>toggleUser(b));document.querySelectorAll('.userTeam').forEach(b=>b.onclick=()=>moveTeam(b));document.querySelectorAll('.userReset').forEach(b=>b.onclick=()=>resetCode(b))}
