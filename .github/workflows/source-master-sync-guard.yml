@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Syntax check
         run: node --check migration/source-master-sync.mjs
@@ -44,8 +46,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1
-          CHANGED=$(git diff --name-only origin/main...HEAD)
+          git fetch origin main
+          CHANGED=$(git diff --name-only origin/main HEAD)
           echo "$CHANGED"
           BAD=$(echo "$CHANGED" | grep -Ev '^(migration/source-master-sync\.mjs|\.github/workflows/source-master-sync\.yml|\.github/workflows/source-master-sync-guard\.yml)$' || true)
           if [ -n "$BAD" ]; then
