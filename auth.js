@@ -7,9 +7,7 @@
   const err=document.getElementById('universalLoginError');
   const status=document.getElementById('universalLoginStatus');
 
-  const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-
-  async function apiOnce(action,args=[]){
+  async function api(action,args=[]){
     if(!API)throw new Error('SMF API is not configured.');
     let r;
     try{r=await fetch(API+'/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,args}),cache:'no-store',credentials:'omit'})}
@@ -17,21 +15,6 @@
     let d={};try{d=await r.json()}catch(_){throw new Error('The server returned an unreadable response.');}
     if(!r.ok||d.ok===false)throw new Error(d.error||('Server error '+r.status));
     return Object.prototype.hasOwnProperty.call(d,'result')?d.result:d;
-  }
-
-  async function api(action,args=[]){
-    let lastErr;
-    for(let attempt=0;attempt<2;attempt++){
-      try{return await apiOnce(action,args)}catch(e){
-        lastErr=e;
-        const msg=String(e?.message||e||'');
-        const retryable=/Apps Script bridge timed out|bridge connection failed|Network connection failed/i.test(msg);
-        if(!retryable||attempt===1)break;
-        status.textContent='Connection is slow — retrying sign-in…';
-        await sleep(900);
-      }
-    }
-    throw lastErr;
   }
 
   function clearRoleSessions(){
