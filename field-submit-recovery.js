@@ -35,6 +35,20 @@
   function visiblePhotoSyncPending(){return [...document.querySelectorAll('.photoStatus')].some(el=>/saved\s*[—-]\s*(finalizing|sync pending)/i.test(String(el.textContent||'')));}
   function currentStoreId(){const line=document.querySelector('.storeHero .small');return line?String(line.textContent||'').split('•')[0].trim():'';}
 
+  function inventoryError(){
+    for(const row of document.querySelectorAll('.inventoryRow')){
+      const item=String(row.dataset.item||'POSM item');
+      const alloc=Number(row.dataset.alloc||0);
+      const b=Number(row.querySelector('.beg')?.value);
+      const i=Number(row.querySelector('.ins')?.value);
+      if(!Number.isFinite(b)||!Number.isFinite(i))return item+': Beginning and Installed must be numeric.';
+      if(b<0||i<0)return item+': quantities cannot be negative.';
+      if(b>alloc)return item+': Beginning cannot exceed the allocated quantity ('+alloc+').';
+      if(i>b)return item+': Installed ('+i+') cannot exceed Beginning ('+b+').';
+    }
+    return '';
+  }
+
   function currentPayload(storeKey){
     const beginning={},installed={},takeHome={};
     document.querySelectorAll('.inventoryRow').forEach(row=>{
@@ -66,11 +80,11 @@
 
   function enableSubmitAfterOutcome(){
     const btn=$('submitVisit');
-    if(!btn||!selectedOutcome()||activePhotoUpload())return;
+    if(!btn||!selectedOutcome()||activePhotoUpload()||inventoryError())return;
     // This recovery handler owns final submit. Do not let stale in-memory V6 sync flags
     // leave a genuinely visited store permanently OPEN once its uploaded POE is already visible.
     btn.disabled=false;
-    btn.dataset.submitRecovery='2';
+    btn.dataset.submitRecovery='3';
   }
 
   document.addEventListener('click',e=>{
@@ -89,6 +103,8 @@
     const outcome=selectedOutcome();
     if(!outcome)return toast('Choose the final store status first.','error');
     if(activePhotoUpload())return toast('Wait for the current photo upload to finish.','error');
+    const invError=inventoryError();
+    if(invError)return toast('Inventory error — '+invError+' Remaining must equal Beginning − Installed.','error',12000);
 
     const code=String(sessionStorage.getItem('smf_code')||'').trim();
     if(!code)return toast('Your field session expired. Sign in again.','error');
