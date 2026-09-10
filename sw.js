@@ -1,8 +1,14 @@
-const CACHE='smf-v6-shell-7';
-const SHELL=['./','./index.html','./auth.js','./field.html','./styles.css','./brand.css','./app.js','./photo-extra-guard.js','./field-submit-recovery.js','./field-day-filter.js','./stability.js','./config.js','./manifest.webmanifest','./admin.html','./admin.css','./admin.js','./client.html','./client.css','./client.js'];
+const CACHE='smf-v6-shell-8';
+const SHELL=['./','./index.html','./auth.js','./field.html','./styles.css','./brand.css','./app.js','./photo-extra-guard.js','./field-submit-recovery.js','./field-day-filter.js','./stability.js','./config.js','./manifest.webmanifest','./client.html','./client.css','./client.js'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
+  const url=new URL(e.request.url);
+  const isAdmin=url.pathname.endsWith('/admin.html')||url.pathname.endsWith('/admin.js')||url.pathname.endsWith('/admin.css')||url.pathname.includes('/admin-');
+  if(isAdmin){
+    e.respondWith(fetch(e.request,{cache:'no-store'}));
+    return;
+  }
   e.respondWith(fetch(e.request).then(r=>{const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy));return r}).catch(()=>caches.match(e.request)));
 });
